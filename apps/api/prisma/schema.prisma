@@ -1,0 +1,53 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum InstrumentType {
+  STOCK
+  ETF
+  CRYPTO
+  CFD
+  OTHER
+}
+
+enum OperationType {
+  BUY
+  SELL
+  DIVIDEND
+}
+
+model Instrument {
+  id        String   @id @default(cuid())
+  symbol    String   @unique
+  name      String
+  type      InstrumentType
+  market    String?
+  currency  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  operations Operation[]
+}
+
+model Operation {
+  id           String        @id @default(cuid())
+  type         OperationType
+  date         DateTime
+  quantity     Decimal
+  price        Decimal
+  commission   Decimal       @default(0)
+  currency     String
+  createdAt    DateTime      @default(now())
+
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id])
+}

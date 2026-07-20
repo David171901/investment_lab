@@ -1,0 +1,12 @@
+{
+  "name": "investment-lab",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@10.4.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "prisma"
+    ]
+  }
+}
