@@ -3,9 +3,11 @@ dist/
 .next/
 coverage/
 generated/
+docs/
 
 .env
 !.env.example
 
 *.log
 .DS_Store
+.claude
