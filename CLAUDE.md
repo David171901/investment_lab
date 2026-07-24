@@ -6,7 +6,7 @@ Este archivo se lee automáticamente al iniciar Claude Code en este repositorio.
 
 Plataforma web personal (un solo usuario) para importar, almacenar y analizar inversiones realizadas en XTB. Es un laboratorio personal, no un producto comercial.
 
-Plan funcional completo y hoja de ruta por fases: ver `/docs/plan-trabajo-investment-lab.md`.
+Plan funcional completo y hoja de ruta por fases: ver `/docs/planificacion/plan-trabajo-investment-lab.md`.
 
 ## Principios que SIEMPRE debes seguir
 
@@ -27,7 +27,7 @@ Plan funcional completo y hoja de ruta por fases: ver `/docs/plan-trabajo-invest
 ## Estado actual del proyecto
 
 - Fase actual: **Fase 0 — Cimientos del proyecto**
-- Fases futuras: ver hoja de ruta en `/docs/plan-trabajo-investment-lab.md`, sección 6.
+- Fases futuras: ver hoja de ruta en `/docs/planificacion/plan-trabajo-investment-lab.md`, sección 6.
 
 ## Convenciones de trabajo
 

@@ -44,3 +44,36 @@ export async function importXtbFile(file: File): Promise<ImportSummary> {
 
   return res.json();
 }
+
+export interface Position {
+  symbol: string;
+  name: string;
+  market: string | null;
+  currency: string;
+  quantity: string;
+  averageCost: string;
+  costBasis: string;
+  realizedPnL: string;
+  dividendsCollected: string;
+}
+
+export interface PortfolioSummary {
+  currency: string;
+  totalInvested: string;
+  realizedPnL: string;
+  dividendsCollected: string;
+  openPositionsCount: number;
+  instrumentsCount: number;
+}
+
+export async function fetchPositions(): Promise<Position[]> {
+  const res = await fetch(`${API_URL}/portfolio/positions`);
+  if (!res.ok) throw new Error("No se pudieron cargar las posiciones.");
+  return res.json();
+}
+
+export async function fetchPortfolioSummary(): Promise<PortfolioSummary> {
+  const res = await fetch(`${API_URL}/portfolio/summary`);
+  if (!res.ok) throw new Error("No se pudo cargar el resumen del portafolio.");
+  return res.json();
+}
