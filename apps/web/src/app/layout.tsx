@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
+import { SidebarNav } from "@/components/sidebar-nav";
 
 // Tipografía del proyecto: Inter, cargada vía next/font y expuesta como la
 // variable CSS `--font-sans` que consume Tailwind (`font-sans`) en globals.css.
@@ -28,8 +29,13 @@ export default function RootLayout({
       className={`dark ${inter.variable} h-full antialiased`}
       style={{ colorScheme: "dark" }}
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground">
-        <Providers>{children}</Providers>
+      <body className="min-h-full bg-background text-foreground">
+        <Providers>
+          <div className="flex min-h-full flex-col md:flex-row">
+            <SidebarNav />
+            <main className="min-w-0 flex-1">{children}</main>
+          </div>
+        </Providers>
       </body>
     </html>
   );

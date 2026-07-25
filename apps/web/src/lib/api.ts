@@ -113,3 +113,43 @@ export async function fetchDividendEvents(): Promise<DividendEvent[]> {
   if (!res.ok) throw new Error("No se pudo cargar el detalle de dividendos.");
   return res.json();
 }
+
+export interface AllocationSlice {
+  label: string;
+  market: string | null;
+  costBasis: string;
+  weight: number;
+}
+
+export interface Diversification {
+  currency: string;
+  totalInvested: string;
+  byPosition: AllocationSlice[];
+  byMarket: AllocationSlice[];
+  concentration: {
+    positionsCount: number;
+    topWeight: number;
+    top3Weight: number;
+    hhi: number;
+    effectivePositions: number;
+  };
+}
+
+export interface HistoryPoint {
+  month: string;
+  invested: string;
+  realizedPnL: string;
+  dividends: string;
+}
+
+export async function fetchDiversification(): Promise<Diversification> {
+  const res = await fetch(`${API_URL}/portfolio/diversification`);
+  if (!res.ok) throw new Error("No se pudo cargar la diversificación.");
+  return res.json();
+}
+
+export async function fetchHistory(): Promise<HistoryPoint[]> {
+  const res = await fetch(`${API_URL}/portfolio/history`);
+  if (!res.ok) throw new Error("No se pudo cargar el histórico.");
+  return res.json();
+}

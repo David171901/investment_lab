@@ -24,4 +24,14 @@ export class PortfolioController {
   getDividends() {
     return this.portfolioService.getDividendEvents();
   }
+
+  @Get('diversification')
+  getDiversification() {
+    return this.portfolioService.getDiversification();
+  }
+
+  @Get('history')
+  getHistory() {
+    return this.portfolioService.getHistory();
+  }
 }

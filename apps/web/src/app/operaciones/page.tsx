@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -58,13 +57,13 @@ export default function OperacionesPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 p-8">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Operaciones</h1>
-        <Link href="/">
-          <Button variant="outline">← Dashboard</Button>
-        </Link>
-      </header>
+    <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-6 px-6 py-8">
+      <nav className="flex flex-col gap-0.5">
+        <span className="text-lg font-medium">Operaciones</span>
+        <span className="text-[13px] text-muted-foreground">
+          Historial importado desde XTB
+        </span>
+      </nav>
 
       <form onSubmit={handleSubmit} className="flex items-center gap-3">
         <input

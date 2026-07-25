@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -20,7 +19,6 @@ import {
   fetchPortfolioSummary,
   fetchPositions,
   fetchRealizedEvents,
-  type Position,
 } from "@/lib/api";
 import { formatMoney, formatQuantity } from "@/lib/format";
 
@@ -29,6 +27,7 @@ const KICKER =
 const ROW_HOVER = "hover:bg-white/[0.04]";
 const DETAIL_BTN =
   "ml-auto text-[13px] text-[var(--accent)] underline underline-offset-2 transition hover:brightness-125";
+const TOP_POSITIONS_COUNT = 5;
 
 type DialogKind = "realized" | "dividends" | null;
 
@@ -67,23 +66,17 @@ export default function DashboardPage() {
     queryFn: fetchDividendEvents,
   });
 
-  const [view, setView] = useState<"table" | "cards">("table");
-  const [positionFilter, setPositionFilter] = useState("");
   const [dialog, setDialog] = useState<DialogKind>(null);
-  const [updatedAt, setUpdatedAt] = useState("");
+  const [updatedAt] = useState(() =>
+    new Date().toLocaleString("es-ES", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  );
 
   const closeDialog = useCallback(() => setDialog(null), []);
-
-  useEffect(() => {
-    setUpdatedAt(
-      new Date().toLocaleString("es-ES", {
-        day: "numeric",
-        month: "short",
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    );
-  }, []);
 
   const summary = summaryQuery.data;
   const currency = summary?.currency ?? "USD";
@@ -95,37 +88,30 @@ export default function DashboardPage() {
   const realizedEvents = realizedQuery.data ?? [];
   const dividendEvents = dividendsQuery.data ?? [];
 
-  const filteredPositions = useMemo(() => {
-    const q = positionFilter.trim().toLowerCase();
+  const topPositions = useMemo(() => {
     const data = positionsQuery.data ?? [];
-    if (!q) return data;
-    return data.filter(
-      (p) =>
-        p.symbol.toLowerCase().includes(q) ||
-        (p.market ?? "").toLowerCase().includes(q),
-    );
-  }, [positionsQuery.data, positionFilter]);
+    return [...data]
+      .sort((a, b) => Number(b.costBasis) - Number(a.costBasis))
+      .slice(0, TOP_POSITIONS_COUNT);
+  }, [positionsQuery.data]);
+
+  const totalPositions = positionsQuery.data?.length ?? 0;
 
   return (
-    <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-12 px-6 py-8">
+    <div className="mx-auto flex w-full max-w-[1180px] min-h-screen flex-col gap-12 px-6 py-8">
       {/* 1. Nav superior */}
       <nav className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-col gap-0.5">
-          <span className="text-lg font-medium">Investment Lab</span>
+          <span className="text-lg font-medium">Dashboard</span>
           <span className="text-[13px] text-muted-foreground">
-            Portafolio XTB · resumen general
+            Resumen general del portafolio
           </span>
         </div>
-        <div className="flex items-center gap-4">
-          {updatedAt && (
-            <span className="text-xs text-muted-foreground">
-              Actualizado {updatedAt}
-            </span>
-          )}
-          <Link href="/operaciones">
-            <Button variant="outline">Ver operaciones</Button>
-          </Link>
-        </div>
+        {updatedAt && (
+          <span className="text-xs text-muted-foreground">
+            Actualizado {updatedAt}
+          </span>
+        )}
       </nav>
 
       {summaryQuery.isError && (
@@ -220,40 +206,21 @@ export default function DashboardPage() {
         </Card>
       </section>
 
-      {/* 3. Empresas que posees */}
+      {/* 3. Top posiciones — vista compacta, detalle completo en /portafolio */}
       <section className="flex flex-col gap-5">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="flex flex-col gap-0.5">
-            <h2 className="text-xl font-medium">Empresas que posees</h2>
+            <h2 className="text-xl font-medium">Top posiciones</h2>
             <p className="text-[13px] text-muted-foreground">
-              Posiciones abiertas ordenadas por peso en el portafolio
+              Las {TOP_POSITIONS_COUNT} mayores posiciones por capital invertido
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <Input
-              placeholder="Filtrar por símbolo o mercado..."
-              value={positionFilter}
-              onChange={(e) => setPositionFilter(e.target.value)}
-              className="w-[220px]"
-            />
-            <div className="inline-flex items-center rounded-lg border border-border p-0.5 text-sm">
-              {(["table", "cards"] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setView(v)}
-                  className={cn(
-                    "rounded-md px-3 py-1 transition-colors",
-                    view === v
-                      ? "bg-[var(--accent)]/15 text-[var(--accent)]"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {v === "table" ? "Tabla" : "Tarjetas"}
-                </button>
-              ))}
-            </div>
-          </div>
+          <Link href="/portafolio">
+            <Button variant="outline">
+              Ver portafolio completo
+              {totalPositions ? ` (${totalPositions})` : ""}
+            </Button>
+          </Link>
         </div>
 
         {positionsQuery.isLoading && (
@@ -269,77 +236,38 @@ export default function DashboardPage() {
           </p>
         )}
 
-        {positionsQuery.data &&
-          positionsQuery.data.length > 0 &&
-          view === "table" && (
-            <Card className="py-4">
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow className={ROW_HOVER}>
-                      <TableHead>Símbolo</TableHead>
-                      <TableHead>Mercado</TableHead>
-                      <TableHead className="text-right">Cantidad</TableHead>
-                      <TableHead className="text-right">Costo medio</TableHead>
-                      <TableHead className="text-right">Invertido</TableHead>
-                      <TableHead className="text-right">P&amp;L</TableHead>
-                      <TableHead className="text-right">Dividendos</TableHead>
+        {topPositions.length > 0 && (
+          <Card className="py-4">
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow className={ROW_HOVER}>
+                    <TableHead>Símbolo</TableHead>
+                    <TableHead>Mercado</TableHead>
+                    <TableHead className="text-right">Invertido</TableHead>
+                    <TableHead className="text-right">P&amp;L</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {topPositions.map((p) => (
+                    <TableRow key={p.symbol} className={ROW_HOVER}>
+                      <TableCell className="font-medium">{p.symbol}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {p.market ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatMoney(p.costBasis, p.currency)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <PnlValue value={p.realizedPnL} currency={p.currency} />
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredPositions.map((p) => (
-                      <TableRow key={p.symbol} className={ROW_HOVER}>
-                        <TableCell className="font-medium">
-                          {p.symbol}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {p.market ?? "—"}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatQuantity(p.quantity)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatMoney(p.averageCost, p.currency)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatMoney(p.costBasis, p.currency)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          <PnlValue
-                            value={p.realizedPnL}
-                            currency={p.currency}
-                          />
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {Number(p.dividendsCollected) > 0 ? (
-                            <span className="text-positive">
-                              {formatMoney(p.dividendsCollected, p.currency)}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {filteredPositions.length === 0 && <EmptyRow colSpan={7} />}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          )}
-
-        {positionsQuery.data &&
-          positionsQuery.data.length > 0 &&
-          view === "cards" && (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
-              {filteredPositions.map((p) => (
-                <PositionCard key={p.symbol} position={p} />
-              ))}
-              {filteredPositions.length === 0 && (
-                <p className="text-muted-foreground">Sin resultados.</p>
-              )}
-            </div>
-          )}
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
       </section>
 
       {/* Modal: movimientos de P&L realizado */}
@@ -482,55 +410,6 @@ function DetailModal({
         <div className="overflow-y-auto">{children}</div>
       </div>
     </div>
-  );
-}
-
-function PositionCard({ position: p }: { position: Position }) {
-  const rows: { label: string; node: React.ReactNode }[] = [
-    { label: "Cantidad", node: formatQuantity(p.quantity) },
-    { label: "Costo medio", node: formatMoney(p.averageCost, p.currency) },
-    { label: "Invertido", node: formatMoney(p.costBasis, p.currency) },
-    {
-      label: "P&L",
-      node: <PnlValue value={p.realizedPnL} currency={p.currency} />,
-    },
-    {
-      label: "Dividendos",
-      node:
-        Number(p.dividendsCollected) > 0 ? (
-          <span className="text-positive">
-            {formatMoney(p.dividendsCollected, p.currency)}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        ),
-    },
-  ];
-
-  return (
-    <Card className="gap-3 py-5">
-      <CardContent className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <span className="font-medium">{p.symbol}</span>
-          {p.market && (
-            <span className="rounded-lg bg-white/[0.06] px-2 py-0.5 text-[11px] text-muted-foreground">
-              {p.market}
-            </span>
-          )}
-        </div>
-        <div className="flex flex-col gap-1.5">
-          {rows.map((r) => (
-            <div
-              key={r.label}
-              className="flex items-center justify-between text-sm"
-            >
-              <span className="text-muted-foreground">{r.label}</span>
-              <span className="tabular-nums">{r.node}</span>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 

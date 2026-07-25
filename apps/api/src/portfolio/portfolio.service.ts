@@ -57,6 +57,38 @@ export interface DividendEventDto {
   amount: string;
 }
 
+// Peso de una posición (o mercado) sobre el total invertido.
+export interface AllocationSliceDto {
+  label: string; // symbol o mercado
+  market: string | null;
+  costBasis: string;
+  weight: number; // porcentaje 0..100
+}
+
+export interface DiversificationDto {
+  currency: string;
+  totalInvested: string;
+  byPosition: AllocationSliceDto[];
+  byMarket: AllocationSliceDto[];
+  concentration: {
+    positionsCount: number;
+    topWeight: number; // % de la posición más grande
+    top3Weight: number; // % de las 3 más grandes
+    hhi: number; // índice Herfindahl-Hirschman (0..1); mayor = más concentrado
+    effectivePositions: number; // 1/hhi: nº de posiciones "equivalentes" equiponderadas
+  };
+}
+
+// Un punto mensual de la evolución del portafolio (derivado de las operaciones,
+// sin precios de mercado): capital invertido a costo, y P&L realizado y
+// dividendos acumulados hasta el fin de ese mes.
+export interface HistoryPointDto {
+  month: string; // 'YYYY-MM'
+  invested: string;
+  realizedPnL: string;
+  dividends: string;
+}
+
 interface InstrumentAccumulator {
   symbol: string;
   name: string;
@@ -139,6 +171,155 @@ export class PortfolioService {
   async getDividendEvents(): Promise<DividendEventDto[]> {
     const { dividendEvents } = await this.compute();
     return dividendEvents.sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  /**
+   * Diversificación y concentración del portafolio, sobre el costo base de las
+   * posiciones abiertas (no requiere precios de mercado). Devuelve el peso de
+   * cada posición y de cada mercado, más indicadores de concentración.
+   */
+  async getDiversification(): Promise<DiversificationDto> {
+    const { accumulators } = await this.compute();
+
+    const open = [...accumulators.values()]
+      .filter((acc) => acc.quantity.greaterThan(EPSILON))
+      .map((acc) => ({
+        symbol: acc.symbol,
+        market: acc.market,
+        costBasis: acc.quantity.times(acc.averageCost),
+      }));
+
+    const currency =
+      [...accumulators.values()][0]?.currency ?? 'USD';
+    const total = open.reduce((sum, p) => sum.plus(p.costBasis), new D(0));
+    const weightPct = (cb: DecimalValue) =>
+      total.isZero() ? 0 : Number(cb.dividedBy(total).times(100));
+
+    const byPosition: AllocationSliceDto[] = open
+      .map((p) => ({
+        label: p.symbol,
+        market: p.market,
+        costBasis: p.costBasis.toString(),
+        weight: weightPct(p.costBasis),
+      }))
+      .sort((a, b) => Number(b.costBasis) - Number(a.costBasis));
+
+    const marketTotals = new Map<string, DecimalValue>();
+    for (const p of open) {
+      const key = p.market ?? '—';
+      marketTotals.set(key, (marketTotals.get(key) ?? new D(0)).plus(p.costBasis));
+    }
+    const byMarket: AllocationSliceDto[] = [...marketTotals.entries()]
+      .map(([market, cb]) => ({
+        label: market,
+        market,
+        costBasis: cb.toString(),
+        weight: weightPct(cb),
+      }))
+      .sort((a, b) => Number(b.costBasis) - Number(a.costBasis));
+
+    // Fracciones (0..1) para los indicadores de concentración.
+    const fractions = open
+      .map((p) => (total.isZero() ? 0 : Number(p.costBasis.dividedBy(total))))
+      .sort((a, b) => b - a);
+    const hhi = fractions.reduce((s, f) => s + f * f, 0);
+    const topWeight = (fractions[0] ?? 0) * 100;
+    const top3Weight = fractions.slice(0, 3).reduce((s, f) => s + f, 0) * 100;
+
+    return {
+      currency,
+      totalInvested: total.toString(),
+      byPosition,
+      byMarket,
+      concentration: {
+        positionsCount: open.length,
+        topWeight,
+        top3Weight,
+        hhi,
+        effectivePositions: hhi > 0 ? 1 / hhi : 0,
+      },
+    };
+  }
+
+  /**
+   * Evolución mensual del portafolio derivada de las operaciones: capital
+   * invertido a costo (costo base de lo que se tenía al fin de cada mes), y
+   * P&L realizado y dividendos acumulados. No usa precios de mercado, así que
+   * no es el valor de mercado del portafolio sino su "capital desplegado" y las
+   * ganancias/ingresos ya materializados.
+   */
+  async getHistory(): Promise<HistoryPointDto[]> {
+    const operations = await this.prisma.operation.findMany();
+
+    // Orden cronológico global (compra antes que venta en el mismo instante).
+    const ops = [...operations].sort((a, b) => {
+      const dateDiff = a.date.getTime() - b.date.getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9);
+    });
+
+    const holdings = new Map<
+      string,
+      { quantity: DecimalValue; averageCost: DecimalValue }
+    >();
+    let realizedCum = new D(0);
+    let dividendsCum = new D(0);
+
+    const investedNow = () => {
+      let sum = new D(0);
+      for (const h of holdings.values()) {
+        if (h.quantity.greaterThan(EPSILON)) {
+          sum = sum.plus(h.quantity.times(h.averageCost));
+        }
+      }
+      return sum;
+    };
+
+    // Snapshot por mes: el último estado dentro del mes queda como su valor.
+    const byMonth = new Map<string, HistoryPointDto>();
+
+    for (const op of ops) {
+      const quantity = new D(op.quantity);
+      const price = new D(op.price);
+      const commission = new D(op.commission);
+      const h = holdings.get(op.instrumentId) ?? {
+        quantity: new D(0),
+        averageCost: new D(0),
+      };
+
+      if (op.type === 'BUY') {
+        const newQuantity = h.quantity.plus(quantity);
+        const addedCost = quantity.times(price).plus(commission);
+        const totalCost = h.averageCost.times(h.quantity).plus(addedCost);
+        h.averageCost = newQuantity.isZero()
+          ? new D(0)
+          : totalCost.dividedBy(newQuantity);
+        h.quantity = newQuantity;
+      } else if (op.type === 'SELL') {
+        realizedCum = realizedCum.plus(
+          quantity.times(price.minus(h.averageCost)).minus(commission),
+        );
+        h.quantity = h.quantity.minus(quantity);
+        if (h.quantity.abs().lessThanOrEqualTo(EPSILON)) {
+          h.quantity = new D(0);
+          h.averageCost = new D(0);
+        }
+      } else if (op.type === 'DIVIDEND') {
+        dividendsCum = dividendsCum.plus(price);
+      }
+      holdings.set(op.instrumentId, h);
+
+      const d = op.date;
+      const month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      byMonth.set(month, {
+        month,
+        invested: investedNow().toString(),
+        realizedPnL: realizedCum.toString(),
+        dividends: dividendsCum.toString(),
+      });
+    }
+
+    return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
   }
 
   /**
