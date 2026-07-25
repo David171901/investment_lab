@@ -30,6 +30,33 @@ export interface PortfolioSummaryDto {
   instrumentsCount: number;
 }
 
+// Cada venta (SELL) que cerró — total o parcialmente — una posición, con el
+// cálculo desglosado del P&L realizado que aportó.
+export interface RealizedEventDto {
+  externalId: string;
+  symbol: string;
+  name: string;
+  market: string | null;
+  currency: string;
+  date: string;
+  quantity: string;
+  sellPrice: string;
+  averageCost: string;
+  commission: string;
+  realizedPnL: string;
+}
+
+// Cada dividendo cobrado.
+export interface DividendEventDto {
+  externalId: string;
+  symbol: string;
+  name: string;
+  market: string | null;
+  currency: string;
+  date: string;
+  amount: string;
+}
+
 interface InstrumentAccumulator {
   symbol: string;
   name: string;
@@ -41,6 +68,12 @@ interface InstrumentAccumulator {
   dividendsCollected: DecimalValue;
 }
 
+interface ComputationResult {
+  accumulators: Map<string, InstrumentAccumulator>;
+  realizedEvents: RealizedEventDto[];
+  dividendEvents: DividendEventDto[];
+}
+
 // Orden de proceso dentro de un mismo instante: una compra debe procesarse
 // antes que una venta para que nunca se venda algo que aún no se compró.
 const TYPE_ORDER: Record<string, number> = { BUY: 0, SELL: 1, DIVIDEND: 2 };
@@ -50,7 +83,7 @@ export class PortfolioService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getPositions(): Promise<PositionDto[]> {
-    const accumulators = await this.computeAccumulators();
+    const { accumulators } = await this.compute();
     return [...accumulators.values()]
       .filter((acc) => acc.quantity.greaterThan(EPSILON))
       .map((acc) => ({
@@ -68,7 +101,7 @@ export class PortfolioService {
   }
 
   async getSummary(): Promise<PortfolioSummaryDto> {
-    const accumulators = await this.computeAccumulators();
+    const { accumulators } = await this.compute();
 
     let totalInvested = new D(0);
     let realizedPnL = new D(0);
@@ -96,13 +129,27 @@ export class PortfolioService {
     };
   }
 
+  // Detalle de las ventas que compusieron el P&L realizado, más reciente primero.
+  async getRealizedEvents(): Promise<RealizedEventDto[]> {
+    const { realizedEvents } = await this.compute();
+    return realizedEvents.sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  // Detalle de los dividendos cobrados, más reciente primero.
+  async getDividendEvents(): Promise<DividendEventDto[]> {
+    const { dividendEvents } = await this.compute();
+    return dividendEvents.sort((a, b) => b.date.localeCompare(a.date));
+  }
+
   /**
    * Recorre todas las operaciones agrupadas por instrumento, en orden
-   * cronológico, aplicando costo promedio ponderado. Devuelve el estado
-   * final (cantidad neta, costo promedio, P&L realizado, dividendos) por
-   * instrumento. Todo se deriva de `Operation`; no hay estado persistido.
+   * cronológico, aplicando costo promedio ponderado. Además de los
+   * acumuladores por instrumento (cantidad neta, costo promedio, P&L
+   * realizado, dividendos), captura el detalle evento por evento de cada
+   * venta que generó P&L y cada dividendo cobrado. Todo se deriva de
+   * `Operation`; no hay estado persistido.
    */
-  private async computeAccumulators(): Promise<Map<string, InstrumentAccumulator>> {
+  private async compute(): Promise<ComputationResult> {
     const operations = await this.prisma.operation.findMany({
       include: { instrument: true },
     });
@@ -116,6 +163,8 @@ export class PortfolioService {
     }
 
     const accumulators = new Map<string, InstrumentAccumulator>();
+    const realizedEvents: RealizedEventDto[] = [];
+    const dividendEvents: DividendEventDto[] = [];
 
     for (const [instrumentId, ops] of grouped) {
       ops.sort((a, b) => {
@@ -152,9 +201,26 @@ export class PortfolioService {
           acc.quantity = newQuantity;
         } else if (op.type === 'SELL') {
           // P&L realizado = cantidad * (precio_venta - costo_promedio) - comisión.
-          acc.realizedPnL = acc.realizedPnL.plus(
-            quantity.times(price.minus(acc.averageCost)).minus(commission),
-          );
+          const averageCostAtSale = acc.averageCost;
+          const eventPnL = quantity
+            .times(price.minus(averageCostAtSale))
+            .minus(commission);
+          acc.realizedPnL = acc.realizedPnL.plus(eventPnL);
+
+          realizedEvents.push({
+            externalId: op.externalId,
+            symbol: acc.symbol,
+            name: acc.name,
+            market: acc.market,
+            currency: acc.currency,
+            date: op.date.toISOString(),
+            quantity: quantity.toString(),
+            sellPrice: price.toString(),
+            averageCost: averageCostAtSale.toString(),
+            commission: commission.toString(),
+            realizedPnL: eventPnL.toString(),
+          });
+
           acc.quantity = acc.quantity.minus(quantity);
           // El costo promedio del remanente no cambia al vender; solo si la
           // posición se cierra por completo lo reiniciamos.
@@ -165,12 +231,22 @@ export class PortfolioService {
         } else if (op.type === 'DIVIDEND') {
           // En DIVIDEND, `price` guarda el monto total cobrado (quantity = 1).
           acc.dividendsCollected = acc.dividendsCollected.plus(price);
+
+          dividendEvents.push({
+            externalId: op.externalId,
+            symbol: acc.symbol,
+            name: acc.name,
+            market: acc.market,
+            currency: acc.currency,
+            date: op.date.toISOString(),
+            amount: price.toString(),
+          });
         }
       }
 
       accumulators.set(instrumentId, acc);
     }
 
-    return accumulators;
+    return { accumulators, realizedEvents, dividendEvents };
   }
 }

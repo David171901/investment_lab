@@ -14,4 +14,14 @@ export class PortfolioController {
   getSummary() {
     return this.portfolioService.getSummary();
   }
+
+  @Get('realized')
+  getRealized() {
+    return this.portfolioService.getRealizedEvents();
+  }
+
+  @Get('dividends')
+  getDividends() {
+    return this.portfolioService.getDividendEvents();
+  }
 }

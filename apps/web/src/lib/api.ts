@@ -77,3 +77,39 @@ export async function fetchPortfolioSummary(): Promise<PortfolioSummary> {
   if (!res.ok) throw new Error("No se pudo cargar el resumen del portafolio.");
   return res.json();
 }
+
+export interface RealizedEvent {
+  externalId: string;
+  symbol: string;
+  name: string;
+  market: string | null;
+  currency: string;
+  date: string;
+  quantity: string;
+  sellPrice: string;
+  averageCost: string;
+  commission: string;
+  realizedPnL: string;
+}
+
+export interface DividendEvent {
+  externalId: string;
+  symbol: string;
+  name: string;
+  market: string | null;
+  currency: string;
+  date: string;
+  amount: string;
+}
+
+export async function fetchRealizedEvents(): Promise<RealizedEvent[]> {
+  const res = await fetch(`${API_URL}/portfolio/realized`);
+  if (!res.ok) throw new Error("No se pudo cargar el detalle de P&L realizado.");
+  return res.json();
+}
+
+export async function fetchDividendEvents(): Promise<DividendEvent[]> {
+  const res = await fetch(`${API_URL}/portfolio/dividends`);
+  if (!res.ok) throw new Error("No se pudo cargar el detalle de dividendos.");
+  return res.json();
+}
