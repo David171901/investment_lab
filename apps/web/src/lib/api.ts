@@ -153,3 +153,36 @@ export async function fetchHistory(): Promise<HistoryPoint[]> {
   if (!res.ok) throw new Error("No se pudo cargar el histórico.");
   return res.json();
 }
+
+export async function streamAnalysisAnswer(
+  question: string,
+  onChunk: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/analysis/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    let message = "No se pudo generar el análisis.";
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed?.message ?? message;
+    } catch {
+      if (text) message = text;
+    }
+    throw new Error(message);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    onChunk(decoder.decode(value, { stream: true }));
+  }
+}

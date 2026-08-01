@@ -7,6 +7,7 @@ import {
   BarChart3,
   Briefcase,
   LayoutDashboard,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/portafolio", label: "Portafolio", icon: Briefcase },
   { href: "/analisis", label: "Análisis", icon: BarChart3 },
+  { href: "/asistente", label: "Asistente", icon: Sparkles },
   { href: "/operaciones", label: "Operaciones", icon: ArrowLeftRight },
 ] as const;
 
@@ -26,8 +28,8 @@ export function SidebarNav() {
 
   return (
     <>
-      {/* Sidebar — desktop */}
-      <aside className="hidden w-56 flex-none flex-col gap-1 border-r border-border bg-card/40 px-3 py-6 md:flex">
+      {/* Sidebar — desktop: fijo a toda la altura de pantalla, no se mueve con el scroll del contenido */}
+      <aside className="hidden w-56 flex-none flex-col gap-1 border-r border-border bg-card/40 px-3 py-6 md:fixed md:inset-y-0 md:left-0 md:flex md:h-screen md:overflow-y-auto">
         <div className="mb-4 px-3">
           <span className="text-lg font-medium">Investment Lab</span>
           <p className="text-[13px] text-muted-foreground">Portafolio XTB</p>
