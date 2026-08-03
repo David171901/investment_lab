@@ -1,18 +1,23 @@
-import { Controller, Get } from '@nestjs/common';
-import { PortfolioService } from './portfolio.service';
+import { Controller, Get, Param, Query } from '@nestjs/common';
+import { PortfolioService, type ValuationBasis } from './portfolio.service';
+
+// Rango del gráfico de velas. Se pide siempre el máximo y el frontend recorta,
+// así cambiar de 3M a 1A no gasta otra llamada al proveedor.
+const CANDLE_DAYS = 365;
 
 @Controller('portfolio')
 export class PortfolioController {
   constructor(private readonly portfolioService: PortfolioService) {}
 
+  // `?refresh=true` ignora el cache de cotizaciones y consulta al proveedor.
   @Get('positions')
-  getPositions() {
-    return this.portfolioService.getPositions();
+  getPositions(@Query('refresh') refresh?: string) {
+    return this.portfolioService.getPositions(refresh === 'true');
   }
 
   @Get('summary')
-  getSummary() {
-    return this.portfolioService.getSummary();
+  getSummary(@Query('refresh') refresh?: string) {
+    return this.portfolioService.getSummary(refresh === 'true');
   }
 
   @Get('realized')
@@ -26,12 +31,19 @@ export class PortfolioController {
   }
 
   @Get('diversification')
-  getDiversification() {
-    return this.portfolioService.getDiversification();
+  getDiversification(@Query('basis') basis?: string) {
+    const valuation: ValuationBasis = basis === 'market' ? 'market' : 'cost';
+    return this.portfolioService.getDiversification(valuation);
   }
 
   @Get('history')
   getHistory() {
     return this.portfolioService.getHistory();
+  }
+
+  // Detalle de un instrumento: su posición + velas históricas (Fase 3.5).
+  @Get('instrument/:symbol')
+  getInstrument(@Param('symbol') symbol: string) {
+    return this.portfolioService.getInstrumentDetail(symbol, CANDLE_DAYS);
   }
 }

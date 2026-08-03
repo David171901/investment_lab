@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -49,13 +49,16 @@ function formatDate(iso: string): string {
 }
 
 export default function DashboardPage() {
+  const queryClient = useQueryClient();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   const summaryQuery = useQuery({
     queryKey: ["portfolio-summary"],
-    queryFn: fetchPortfolioSummary,
+    queryFn: () => fetchPortfolioSummary(),
   });
   const positionsQuery = useQuery({
     queryKey: ["portfolio-positions"],
-    queryFn: fetchPositions,
+    queryFn: () => fetchPositions(),
   });
   const realizedQuery = useQuery({
     queryKey: ["portfolio-realized"],
@@ -77,6 +80,24 @@ export default function DashboardPage() {
   );
 
   const closeDialog = useCallback(() => setDialog(null), []);
+
+  // Fuerza consulta al proveedor ignorando el cache, y siembra el resultado en
+  // TanStack Query para que la UI lo tome sin un refetch extra.
+  const refreshPrices = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const [freshSummary, freshPositions] = await Promise.all([
+        fetchPortfolioSummary(true),
+        fetchPositions(true),
+      ]);
+      queryClient.setQueryData(["portfolio-summary"], freshSummary);
+      queryClient.setQueryData(["portfolio-positions"], freshPositions);
+      // La diversificación a valor de mercado deriva de las mismas cotizaciones.
+      queryClient.invalidateQueries({ queryKey: ["portfolio-diversification"] });
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [queryClient]);
 
   const summary = summaryQuery.data;
   const currency = summary?.currency ?? "USD";
@@ -204,6 +225,105 @@ export default function DashboardPage() {
             </span>
           </CardContent>
         </Card>
+      </section>
+
+      {/* 2b. Valuación a mercado (Fase 3.5) — fila aparte para no alterar la
+          grilla de hero-stats; si no hay cotizaciones muestra cómo activarlas. */}
+      <section className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="text-xl font-medium">Valuación a mercado</h2>
+            <p className="text-[13px] text-muted-foreground">
+              {summary?.quotesConfigured
+                ? `Precio actual de ${summary.positionsWithQuote} de ${summary.openPositionsCount} posiciones` +
+                  (summary.positionsWithoutQuote > 0
+                    ? ` · ${summary.positionsWithoutQuote} sin cotización disponible`
+                    : "")
+                : "Requiere un proveedor de cotizaciones configurado"}
+            </p>
+          </div>
+          {summary?.quotesConfigured && (
+            <Button
+              variant="outline"
+              onClick={() => void refreshPrices()}
+              disabled={isRefreshing}
+            >
+              {isRefreshing ? "Actualizando..." : "Actualizar precios"}
+            </Button>
+          )}
+        </div>
+
+        {summary && !summary.quotesConfigured && (
+          <Card className="py-4">
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                Configurá{" "}
+                <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[12px]">
+                  FINNHUB_API_KEY
+                </code>{" "}
+                en <code className="text-[12px]">apps/api/.env</code>{" "}
+                para ver el valor actual de tu portafolio y el P&amp;L no
+                realizado. Sin eso, todo se muestra a costo de compra.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {summary?.marketValue && (
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+            <Card className="gap-2 py-5">
+              <CardContent className="flex flex-col gap-1.5">
+                <span className={KICKER}>Valor de mercado</span>
+                <span className="text-[26px] leading-none font-medium tabular-nums">
+                  {formatMoney(summary.marketValue, currency)}
+                </span>
+                <span className="text-[13px] text-muted-foreground">
+                  hoy, a precio de mercado
+                </span>
+              </CardContent>
+            </Card>
+
+            <Card className="gap-2 py-5">
+              <CardContent className="flex flex-col gap-1.5">
+                <span className={KICKER}>P&amp;L no realizado</span>
+                <span
+                  className={cn(
+                    "text-[26px] leading-none font-medium tabular-nums",
+                    pnlClass(summary.unrealizedPnL ?? 0),
+                  )}
+                >
+                  {formatMoney(summary.unrealizedPnL ?? 0, currency)}
+                </span>
+                <span className="text-[13px] text-muted-foreground">
+                  {summary.returnPct != null && (
+                    <span className={pnlClass(summary.returnPct)}>
+                      {summary.returnPct >= 0 ? "▲" : "▼"}{" "}
+                      {Math.abs(summary.returnPct).toFixed(2)}%{" "}
+                    </span>
+                  )}
+                  sobre el costo
+                </span>
+              </CardContent>
+            </Card>
+
+            <Card className="gap-2 py-5">
+              <CardContent className="flex flex-col gap-1.5">
+                <span className={KICKER}>P&amp;L total</span>
+                <span
+                  className={cn(
+                    "text-[26px] leading-none font-medium tabular-nums",
+                    pnlClass(summary.totalPnL ?? 0),
+                  )}
+                >
+                  {formatMoney(summary.totalPnL ?? 0, currency)}
+                </span>
+                <span className="text-[13px] text-muted-foreground">
+                  realizado + no realizado + dividendos
+                </span>
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </section>
 
       {/* 3. Top posiciones — vista compacta, detalle completo en /portafolio */}

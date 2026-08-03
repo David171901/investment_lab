@@ -55,6 +55,13 @@ export interface Position {
   costBasis: string;
   realizedPnL: string;
   dividendsCollected: string;
+  // null cuando no hay cotización para el instrumento.
+  marketPrice: string | null;
+  marketValue: string | null;
+  unrealizedPnL: string | null;
+  returnPct: number | null;
+  quoteAsOf: string | null;
+  quoteStale: boolean;
 }
 
 export interface PortfolioSummary {
@@ -64,16 +71,31 @@ export interface PortfolioSummary {
   dividendsCollected: string;
   openPositionsCount: number;
   instrumentsCount: number;
+  marketValue: string | null;
+  unrealizedPnL: string | null;
+  totalPnL: string | null;
+  returnPct: number | null;
+  positionsWithQuote: number;
+  positionsWithoutQuote: number;
+  quotesConfigured: boolean;
 }
 
-export async function fetchPositions(): Promise<Position[]> {
-  const res = await fetch(`${API_URL}/portfolio/positions`);
+// `refresh` ignora el cache de cotizaciones del backend y consulta al proveedor.
+// Solo debería usarlo una acción explícita del usuario: consume cuota real.
+export async function fetchPositions(refresh = false): Promise<Position[]> {
+  const res = await fetch(
+    `${API_URL}/portfolio/positions${refresh ? "?refresh=true" : ""}`,
+  );
   if (!res.ok) throw new Error("No se pudieron cargar las posiciones.");
   return res.json();
 }
 
-export async function fetchPortfolioSummary(): Promise<PortfolioSummary> {
-  const res = await fetch(`${API_URL}/portfolio/summary`);
+export async function fetchPortfolioSummary(
+  refresh = false,
+): Promise<PortfolioSummary> {
+  const res = await fetch(
+    `${API_URL}/portfolio/summary${refresh ? "?refresh=true" : ""}`,
+  );
   if (!res.ok) throw new Error("No se pudo cargar el resumen del portafolio.");
   return res.json();
 }
@@ -121,8 +143,11 @@ export interface AllocationSlice {
   weight: number;
 }
 
+export type ValuationBasis = "cost" | "market";
+
 export interface Diversification {
   currency: string;
+  basis: ValuationBasis;
   totalInvested: string;
   byPosition: AllocationSlice[];
   byMarket: AllocationSlice[];
@@ -133,6 +158,24 @@ export interface Diversification {
     hhi: number;
     effectivePositions: number;
   };
+  excludedForMissingQuote: number;
+}
+
+export interface Candle {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface InstrumentDetail {
+  position: Position;
+  isOpen: boolean;
+  candles: Candle[];
+  quotesConfigured: boolean;
+  candlesConfigured: boolean;
 }
 
 export interface HistoryPoint {
@@ -142,9 +185,29 @@ export interface HistoryPoint {
   dividends: string;
 }
 
-export async function fetchDiversification(): Promise<Diversification> {
-  const res = await fetch(`${API_URL}/portfolio/diversification`);
+export async function fetchDiversification(
+  basis: ValuationBasis = "cost",
+): Promise<Diversification> {
+  const res = await fetch(
+    `${API_URL}/portfolio/diversification?basis=${basis}`,
+  );
   if (!res.ok) throw new Error("No se pudo cargar la diversificación.");
+  return res.json();
+}
+
+export async function fetchInstrumentDetail(
+  symbol: string,
+): Promise<InstrumentDetail> {
+  const res = await fetch(
+    `${API_URL}/portfolio/instrument/${encodeURIComponent(symbol)}`,
+  );
+  if (!res.ok) {
+    throw new Error(
+      res.status === 404
+        ? `No hay operaciones para ${symbol}.`
+        : "No se pudo cargar el detalle del instrumento.",
+    );
+  }
   return res.json();
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Area,
@@ -19,7 +19,12 @@ import {
   YAxis,
 } from "recharts";
 import { Card, CardContent } from "@/components/ui/card";
-import { fetchDiversification, fetchHistory } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import {
+  fetchDiversification,
+  fetchHistory,
+  type ValuationBasis,
+} from "@/lib/api";
 import { formatMoney } from "@/lib/format";
 
 // Paleta validada contra la superficie de la card (#232532) con el script del
@@ -110,9 +115,11 @@ function ConcentrationTile({
 }
 
 export function PortfolioAnalysis() {
+  const [basis, setBasis] = useState<ValuationBasis>("cost");
+
   const divQuery = useQuery({
-    queryKey: ["portfolio-diversification"],
-    queryFn: fetchDiversification,
+    queryKey: ["portfolio-diversification", basis],
+    queryFn: () => fetchDiversification(basis),
   });
   const historyQuery = useQuery({
     queryKey: ["portfolio-history"],
@@ -149,18 +156,66 @@ export function PortfolioAnalysis() {
     <>
       {/* Diversificación y riesgo */}
       <section className="flex flex-col gap-5">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="text-xl font-medium">Diversificación y riesgo</h2>
-          <p className="text-[13px] text-muted-foreground">
-            Peso de cada posición sobre el capital invertido (a costo)
-          </p>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="text-xl font-medium">Diversificación y riesgo</h2>
+            <p className="text-[13px] text-muted-foreground">
+              {basis === "cost"
+                ? "Peso de cada posición sobre el capital invertido (a costo)"
+                : "Peso de cada posición sobre el valor de mercado actual"}
+            </p>
+          </div>
+          <div className="inline-flex items-center rounded-lg border border-border p-0.5 text-sm">
+            {(
+              [
+                ["cost", "A costo"],
+                ["market", "A mercado"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setBasis(value)}
+                className={cn(
+                  "rounded-md px-3 py-1 transition-colors",
+                  basis === value
+                    ? "bg-[var(--accent)]/15 text-[var(--accent)]"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {divQuery.isError && (
           <p className="text-negative">No se pudo cargar la diversificación.</p>
         )}
 
-        {div && (
+        {div && div.byPosition.length === 0 && basis === "market" && (
+          <Card className="py-4">
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                No hay cotizaciones disponibles para ninguna posición
+                {div.excludedForMissingQuote > 0 &&
+                  ` (${div.excludedForMissingQuote} excluidas)`}
+                . Configurá el proveedor de cotizaciones o volvé a la vista
+                &quot;A costo&quot;.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {div && div.byPosition.length > 0 && basis === "market" &&
+          div.excludedForMissingQuote > 0 && (
+            <p className="text-[13px] text-muted-foreground">
+              {div.excludedForMissingQuote} posición(es) excluida(s) por no
+              tener cotización disponible.
+            </p>
+          )}
+
+        {div && div.byPosition.length > 0 && (
           <>
             <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
               <ConcentrationTile

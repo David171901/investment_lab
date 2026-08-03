@@ -35,7 +35,15 @@ model Instrument {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  operations Operation[]
+  // Ticker con el que este instrumento se consulta en el proveedor de
+  // cotizaciones (Fase 3.5). Si es null se deriva del `symbol` quitando el
+  // sufijo de mercado de XTB (ej. `META.US` -> `META`). Existe para poder
+  // corregir a mano los casos donde esa derivación no da el ticker real.
+  externalTicker String?
+
+  operations  Operation[]
+  quote       Quote?
+  candleCache CandleCache?
 }
 
 model Operation {
@@ -51,4 +59,31 @@ model Operation {
 
   instrumentId String
   instrument   Instrument @relation(fields: [instrumentId], references: [id])
+}
+
+// Cache de la última cotización conocida de cada instrumento (Fase 3.5).
+// No es un histórico: hay una fila por instrumento y se sobrescribe en cada
+// consulta al proveedor. El histórico de velas no se persiste — se pide al
+// proveedor bajo demanda.
+model Quote {
+  instrumentId String   @id
+  price        Decimal
+  currency     String
+  // Momento al que corresponde el precio, según el proveedor.
+  asOf         DateTime
+  // Momento en que lo consultamos (base del TTL de cache).
+  fetchedAt    DateTime @default(now())
+
+  instrument Instrument @relation(fields: [instrumentId], references: [id])
+}
+
+// Cache de las velas históricas de un instrumento. Las velas diarias cambian
+// una vez por día, así que un TTL largo evita gastar cuota del proveedor cada
+// vez que se abre la vista de detalle.
+model CandleCache {
+  instrumentId String   @id
+  payload      Json
+  fetchedAt    DateTime @default(now())
+
+  instrument Instrument @relation(fields: [instrumentId], references: [id])
 }

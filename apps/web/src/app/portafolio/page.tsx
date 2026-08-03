@@ -32,10 +32,32 @@ function PnlValue({ value, currency }: { value: string; currency: string }) {
   return <span className={pnlClass(n)}>{formatMoney(value, currency)}</span>;
 }
 
+// P&L no realizado con su rendimiento %; "—" cuando no hay cotización.
+function UnrealizedValue({ position: p }: { position: Position }) {
+  if (p.unrealizedPnL == null) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  const n = Number(p.unrealizedPnL);
+  return (
+    <span className={cn(pnlClass(n), "inline-flex items-center gap-1.5")}>
+      {formatMoney(p.unrealizedPnL, p.currency)}
+      {p.returnPct != null && (
+        <span className="text-[11px] opacity-80">
+          ({p.returnPct >= 0 ? "+" : ""}
+          {p.returnPct.toFixed(1)}%)
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function PortafolioPage() {
   const positionsQuery = useQuery({
     queryKey: ["portfolio-positions"],
-    queryFn: fetchPositions,
+    // Envuelto en arrow: pasar `fetchPositions` directo haría que TanStack le
+    // mande su objeto de contexto como argumento `refresh` (truthy) y forzara
+    // consulta al proveedor en cada carga.
+    queryFn: () => fetchPositions(),
   });
 
   const [view, setView] = useState<"table" | "cards">("table");
@@ -126,7 +148,14 @@ export default function PortafolioPage() {
                       <TableHead className="text-right">Cantidad</TableHead>
                       <TableHead className="text-right">Costo medio</TableHead>
                       <TableHead className="text-right">Invertido</TableHead>
-                      <TableHead className="text-right">P&amp;L</TableHead>
+                      <TableHead className="text-right">Precio actual</TableHead>
+                      <TableHead className="text-right">Valor mercado</TableHead>
+                      <TableHead className="text-right">
+                        P&amp;L no realizado
+                      </TableHead>
+                      <TableHead className="text-right">
+                        P&amp;L realizado
+                      </TableHead>
                       <TableHead className="text-right">Dividendos</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -134,7 +163,12 @@ export default function PortafolioPage() {
                     {filteredPositions.map((p) => (
                       <TableRow key={p.symbol} className={ROW_HOVER}>
                         <TableCell className="font-medium">
-                          {p.symbol}
+                          <Link
+                            href={`/portafolio/${encodeURIComponent(p.symbol)}`}
+                            className="text-[var(--accent)] hover:underline"
+                          >
+                            {p.symbol}
+                          </Link>
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {p.market ?? "—"}
@@ -147,6 +181,35 @@ export default function PortafolioPage() {
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatMoney(p.costBasis, p.currency)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {p.marketPrice ? (
+                            <span
+                              className={cn(
+                                p.quoteStale && "text-muted-foreground",
+                              )}
+                              title={
+                                p.quoteStale
+                                  ? "Último precio conocido (el proveedor no respondió)"
+                                  : undefined
+                              }
+                            >
+                              {formatMoney(p.marketPrice, p.currency)}
+                              {p.quoteStale && " *"}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {p.marketValue ? (
+                            formatMoney(p.marketValue, p.currency)
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          <UnrealizedValue position={p} />
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           <PnlValue
@@ -165,7 +228,7 @@ export default function PortafolioPage() {
                         </TableCell>
                       </TableRow>
                     ))}
-                    {filteredPositions.length === 0 && <EmptyRow colSpan={7} />}
+                    {filteredPositions.length === 0 && <EmptyRow colSpan={10} />}
                   </TableBody>
                 </Table>
               </CardContent>
@@ -195,7 +258,19 @@ function PositionCard({ position: p }: { position: Position }) {
     { label: "Costo medio", node: formatMoney(p.averageCost, p.currency) },
     { label: "Invertido", node: formatMoney(p.costBasis, p.currency) },
     {
-      label: "P&L",
+      label: "Valor mercado",
+      node: p.marketValue ? (
+        formatMoney(p.marketValue, p.currency)
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      ),
+    },
+    {
+      label: "P&L no realizado",
+      node: <UnrealizedValue position={p} />,
+    },
+    {
+      label: "P&L realizado",
       node: <PnlValue value={p.realizedPnL} currency={p.currency} />,
     },
     {
@@ -215,7 +290,12 @@ function PositionCard({ position: p }: { position: Position }) {
     <Card className="gap-3 py-5">
       <CardContent className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <span className="font-medium">{p.symbol}</span>
+          <Link
+            href={`/portafolio/${encodeURIComponent(p.symbol)}`}
+            className="font-medium text-[var(--accent)] hover:underline"
+          >
+            {p.symbol}
+          </Link>
           {p.market && (
             <span className="rounded-lg bg-white/[0.06] px-2 py-0.5 text-[11px] text-muted-foreground">
               {p.market}

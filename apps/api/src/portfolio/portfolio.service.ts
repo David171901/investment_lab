@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { QuotesService, type QuoteDto } from '../quotes/quotes.service';
 import { Prisma } from '../../generated/prisma/client';
 
 const D = Prisma.Decimal;
@@ -19,6 +20,14 @@ export interface PositionDto {
   costBasis: string;
   realizedPnL: string;
   dividendsCollected: string;
+  // Fase 3.5 — null cuando no hay cotización disponible para el instrumento
+  // (sin clave del proveedor, símbolo sin cobertura, o fallo de la API).
+  marketPrice: string | null;
+  marketValue: string | null;
+  unrealizedPnL: string | null;
+  returnPct: number | null;
+  quoteAsOf: string | null;
+  quoteStale: boolean;
 }
 
 export interface PortfolioSummaryDto {
@@ -28,6 +37,16 @@ export interface PortfolioSummaryDto {
   dividendsCollected: string;
   openPositionsCount: number;
   instrumentsCount: number;
+  // Fase 3.5 — valuación a mercado. `marketValue` cubre solo las posiciones
+  // con cotización; `positionsWithoutQuote` dice cuántas quedaron afuera para
+  // que la UI no presente un total parcial como si fuera el total.
+  marketValue: string | null;
+  unrealizedPnL: string | null;
+  totalPnL: string | null;
+  returnPct: number | null;
+  positionsWithQuote: number;
+  positionsWithoutQuote: number;
+  quotesConfigured: boolean;
 }
 
 // Cada venta (SELL) que cerró — total o parcialmente — una posición, con el
@@ -65,8 +84,13 @@ export interface AllocationSliceDto {
   weight: number; // porcentaje 0..100
 }
 
+// Base sobre la que se calculan los pesos: el costo de compra (Fase 3) o el
+// valor de mercado actual (Fase 3.5).
+export type ValuationBasis = 'cost' | 'market';
+
 export interface DiversificationDto {
   currency: string;
+  basis: ValuationBasis;
   totalInvested: string;
   byPosition: AllocationSliceDto[];
   byMarket: AllocationSliceDto[];
@@ -77,6 +101,28 @@ export interface DiversificationDto {
     hhi: number; // índice Herfindahl-Hirschman (0..1); mayor = más concentrado
     effectivePositions: number; // 1/hhi: nº de posiciones "equivalentes" equiponderadas
   };
+  // Posiciones excluidas por no tener cotización (solo aplica a basis='market').
+  excludedForMissingQuote: number;
+}
+
+// Vela diaria OHLC, tal como la entrega el proveedor de cotizaciones.
+export interface CandleDto {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface InstrumentDetailDto {
+  position: PositionDto;
+  isOpen: boolean;
+  candles: CandleDto[];
+  // Precios y velas vienen de proveedores distintos, así que se informan por
+  // separado: se puede tener valor de mercado sin gráfico, y viceversa.
+  quotesConfigured: boolean;
+  candlesConfigured: boolean;
 }
 
 // Un punto mensual de la evolución del portafolio (derivado de las operaciones,
@@ -90,10 +136,12 @@ export interface HistoryPointDto {
 }
 
 interface InstrumentAccumulator {
+  instrumentId: string;
   symbol: string;
   name: string;
   market: string | null;
   currency: string;
+  externalTicker: string | null;
   quantity: DecimalValue;
   averageCost: DecimalValue;
   realizedPnL: DecimalValue;
@@ -112,52 +160,159 @@ const TYPE_ORDER: Record<string, number> = { BUY: 0, SELL: 1, DIVIDEND: 2 };
 
 @Injectable()
 export class PortfolioService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly quotes: QuotesService,
+  ) {}
 
-  async getPositions(): Promise<PositionDto[]> {
+  /** Posiciones abiertas del portafolio (cantidad neta > 0). */
+  private openPositions(
+    accumulators: Map<string, InstrumentAccumulator>,
+  ): InstrumentAccumulator[] {
+    return [...accumulators.values()].filter((acc) =>
+      acc.quantity.greaterThan(EPSILON),
+    );
+  }
+
+  private toPositionDto(
+    acc: InstrumentAccumulator,
+    quote: QuoteDto | undefined,
+  ): PositionDto {
+    const costBasis = acc.quantity.times(acc.averageCost);
+
+    let marketPrice: DecimalValue | null = null;
+    let marketValue: DecimalValue | null = null;
+    let unrealizedPnL: DecimalValue | null = null;
+    let returnPct: number | null = null;
+
+    if (quote) {
+      marketPrice = new D(quote.price);
+      marketValue = acc.quantity.times(marketPrice);
+      unrealizedPnL = marketValue.minus(costBasis);
+      // Un costo base ~0 (ej. un spinoff que entró casi gratis) haría explotar
+      // el porcentaje; en ese caso no se reporta rendimiento relativo.
+      returnPct = costBasis.abs().lessThanOrEqualTo(EPSILON)
+        ? null
+        : Number(unrealizedPnL.dividedBy(costBasis).times(100));
+    }
+
+    return {
+      symbol: acc.symbol,
+      name: acc.name,
+      market: acc.market,
+      currency: acc.currency,
+      quantity: acc.quantity.toString(),
+      averageCost: acc.averageCost.toString(),
+      costBasis: costBasis.toString(),
+      realizedPnL: acc.realizedPnL.toString(),
+      dividendsCollected: acc.dividendsCollected.toString(),
+      marketPrice: marketPrice?.toString() ?? null,
+      marketValue: marketValue?.toString() ?? null,
+      unrealizedPnL: unrealizedPnL?.toString() ?? null,
+      returnPct,
+      quoteAsOf: quote?.asOf ?? null,
+      quoteStale: quote?.stale ?? false,
+    };
+  }
+
+  // `refresh` fuerza consulta al proveedor ignorando el cache — lo dispara el
+  // botón "Actualizar precios", no la navegación normal.
+  async getPositions(refresh = false): Promise<PositionDto[]> {
     const { accumulators } = await this.compute();
-    return [...accumulators.values()]
-      .filter((acc) => acc.quantity.greaterThan(EPSILON))
-      .map((acc) => ({
-        symbol: acc.symbol,
-        name: acc.name,
-        market: acc.market,
-        currency: acc.currency,
-        quantity: acc.quantity.toString(),
-        averageCost: acc.averageCost.toString(),
-        costBasis: acc.quantity.times(acc.averageCost).toString(),
-        realizedPnL: acc.realizedPnL.toString(),
-        dividendsCollected: acc.dividendsCollected.toString(),
-      }))
+    const open = this.openPositions(accumulators);
+    const quotes = await this.quotes.getQuotes(open, refresh);
+
+    return open
+      .map((acc) => this.toPositionDto(acc, quotes.get(acc.instrumentId)))
       .sort((a, b) => Number(b.costBasis) - Number(a.costBasis));
   }
 
-  async getSummary(): Promise<PortfolioSummaryDto> {
+  async getSummary(refresh = false): Promise<PortfolioSummaryDto> {
     const { accumulators } = await this.compute();
+    const open = this.openPositions(accumulators);
+    const quotes = await this.quotes.getQuotes(open, refresh);
 
     let totalInvested = new D(0);
     let realizedPnL = new D(0);
     let dividendsCollected = new D(0);
-    let openPositionsCount = 0;
     let currency = 'USD';
 
     for (const acc of accumulators.values()) {
       currency = acc.currency;
       realizedPnL = realizedPnL.plus(acc.realizedPnL);
       dividendsCollected = dividendsCollected.plus(acc.dividendsCollected);
-      if (acc.quantity.greaterThan(EPSILON)) {
-        totalInvested = totalInvested.plus(acc.quantity.times(acc.averageCost));
-        openPositionsCount++;
+    }
+
+    // La valuación a mercado solo suma las posiciones con cotización; se
+    // acumula su costo por separado para que el rendimiento % compare
+    // exactamente el mismo subconjunto (si no, mezclaría peras con manzanas).
+    let marketValue = new D(0);
+    let costOfQuoted = new D(0);
+    let positionsWithQuote = 0;
+
+    for (const acc of open) {
+      const costBasis = acc.quantity.times(acc.averageCost);
+      totalInvested = totalInvested.plus(costBasis);
+
+      const quote = quotes.get(acc.instrumentId);
+      if (quote) {
+        marketValue = marketValue.plus(acc.quantity.times(new D(quote.price)));
+        costOfQuoted = costOfQuoted.plus(costBasis);
+        positionsWithQuote++;
       }
     }
+
+    const hasQuotes = positionsWithQuote > 0;
+    const unrealizedPnL = hasQuotes ? marketValue.minus(costOfQuoted) : null;
 
     return {
       currency,
       totalInvested: totalInvested.toString(),
       realizedPnL: realizedPnL.toString(),
       dividendsCollected: dividendsCollected.toString(),
-      openPositionsCount,
+      openPositionsCount: open.length,
       instrumentsCount: accumulators.size,
+      marketValue: hasQuotes ? marketValue.toString() : null,
+      unrealizedPnL: unrealizedPnL?.toString() ?? null,
+      totalPnL: unrealizedPnL
+        ? unrealizedPnL.plus(realizedPnL).plus(dividendsCollected).toString()
+        : null,
+      returnPct:
+        unrealizedPnL && costOfQuoted.abs().greaterThan(EPSILON)
+          ? Number(unrealizedPnL.dividedBy(costOfQuoted).times(100))
+          : null,
+      positionsWithQuote,
+      positionsWithoutQuote: open.length - positionsWithQuote,
+      quotesConfigured: this.quotes.isConfigured(),
+    };
+  }
+
+  /**
+   * Detalle de un instrumento para su vista propia: la posición (si sigue
+   * abierta) más sus velas históricas.
+   */
+  async getInstrumentDetail(
+    symbol: string,
+    days: number,
+  ): Promise<InstrumentDetailDto> {
+    const { accumulators } = await this.compute();
+    const acc = [...accumulators.values()].find(
+      (a) => a.symbol.toUpperCase() === symbol.toUpperCase(),
+    );
+    if (!acc) {
+      throw new NotFoundException(`No hay operaciones para ${symbol}.`);
+    }
+
+    const isOpen = acc.quantity.greaterThan(EPSILON);
+    const quotes = isOpen ? await this.quotes.getQuotes([acc]) : new Map();
+    const candles = await this.quotes.getCandles(acc, days);
+
+    return {
+      position: this.toPositionDto(acc, quotes.get(acc.instrumentId)),
+      isOpen,
+      candles,
+      quotesConfigured: this.quotes.isConfigured(),
+      candlesConfigured: this.quotes.isCandlesConfigured(),
     };
   }
 
@@ -178,17 +333,32 @@ export class PortfolioService {
    * posiciones abiertas (no requiere precios de mercado). Devuelve el peso de
    * cada posición y de cada mercado, más indicadores de concentración.
    */
-  async getDiversification(): Promise<DiversificationDto> {
+  async getDiversification(
+    basis: ValuationBasis = 'cost',
+  ): Promise<DiversificationDto> {
     const { accumulators } = await this.compute();
+    const openAccs = this.openPositions(accumulators);
 
-    const open = [...accumulators.values()]
-      .filter((acc) => acc.quantity.greaterThan(EPSILON))
-      .map((acc) => ({
-        symbol: acc.symbol,
-        market: acc.market,
-        costBasis: acc.quantity.times(acc.averageCost),
-      }));
+    // A valor de mercado solo entran las posiciones con cotización: incluir
+    // las demás a costo mezclaría dos unidades distintas en el mismo total.
+    const quotes =
+      basis === 'market'
+        ? await this.quotes.getQuotes(openAccs)
+        : new Map<string, QuoteDto>();
 
+    const open = openAccs
+      .map((acc) => {
+        const quote = quotes.get(acc.instrumentId);
+        if (basis === 'market' && !quote) return null;
+        const value =
+          basis === 'market' && quote
+            ? acc.quantity.times(new D(quote.price))
+            : acc.quantity.times(acc.averageCost);
+        return { symbol: acc.symbol, market: acc.market, costBasis: value };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    const excludedForMissingQuote = openAccs.length - open.length;
     const currency =
       [...accumulators.values()][0]?.currency ?? 'USD';
     const total = open.reduce((sum, p) => sum.plus(p.costBasis), new D(0));
@@ -228,6 +398,7 @@ export class PortfolioService {
 
     return {
       currency,
+      basis,
       totalInvested: total.toString(),
       byPosition,
       byMarket,
@@ -238,6 +409,7 @@ export class PortfolioService {
         hhi,
         effectivePositions: hhi > 0 ? 1 / hhi : 0,
       },
+      excludedForMissingQuote,
     };
   }
 
@@ -356,10 +528,12 @@ export class PortfolioService {
 
       const instrument = ops[0].instrument;
       const acc: InstrumentAccumulator = {
+        instrumentId,
         symbol: instrument.symbol,
         name: instrument.name,
         market: instrument.market,
         currency: instrument.currency,
+        externalTicker: instrument.externalTicker,
         quantity: new D(0),
         averageCost: new D(0),
         realizedPnL: new D(0),
