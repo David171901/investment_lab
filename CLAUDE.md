@@ -26,8 +26,14 @@ Plan funcional completo y hoja de ruta por fases: ver `/docs/planificacion/plan-
 
 ## Estado actual del proyecto
 
-- Fase actual: **Fase 0 — Cimientos del proyecto**
-- Fases futuras: ver hoja de ruta en `/docs/planificacion/plan-trabajo-investment-lab.md`, sección 6.
+- Fases completadas: **0, 1, 2, 3, 3.5, 3.6 y 4**. Resúmenes en `/docs/fases/`.
+- Fase siguiente: **Fase 5 — Reportes diarios** (aún no iniciada, requiere aprobación explícita).
+- Hoja de ruta completa: `/docs/planificacion/plan-trabajo-investment-lab.md`, sección 6.
+
+Estado funcional a hoy: se importan operaciones de XTB, se calculan posiciones,
+P&L realizado y no realizado con precios de mercado, métricas de diversificación y
+riesgo, gráficos de sector/rendimiento/dividendos, velas por instrumento, y un
+asistente de preguntas sobre el portafolio con la API de Claude.
 
 ## Convenciones de trabajo
 
