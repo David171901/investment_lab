@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   RateLimitError,
   type ProviderQuote,
+  type ProviderProfile,
 } from './provider-types';
 
 const BASE_URL = process.env.FINNHUB_BASE_URL ?? 'https://finnhub.io/api/v1';
@@ -85,6 +86,57 @@ export class FinnhubProvider {
       // y la UI formatea con la moneda del instrumento de todos modos.
       currency: 'USD',
       asOf,
+    };
+  }
+
+  /**
+   * Perfil (industria y país del emisor) de varios tickers (Fase 3.6).
+   *
+   * Igual que `/quote`, es una llamada por símbolo. A diferencia de los
+   * precios, esto se pide una sola vez por instrumento: el sector de una
+   * empresa no cambia, así que el consumo de cuota es despreciable.
+   */
+  async fetchProfiles(tickers: string[]): Promise<ProviderProfile[]> {
+    if (tickers.length === 0) return [];
+
+    const results: ProviderProfile[] = [];
+    for (let i = 0; i < tickers.length; i += CONCURRENCY) {
+      const batch = tickers.slice(i, i + CONCURRENCY);
+      const settled = await Promise.all(
+        batch.map((ticker) => this.fetchProfile(ticker)),
+      );
+      for (const profile of settled) {
+        if (profile) results.push(profile);
+      }
+    }
+    return results;
+  }
+
+  private async fetchProfile(ticker: string): Promise<ProviderProfile | null> {
+    const url = `${BASE_URL}/stock/profile2?symbol=${encodeURIComponent(ticker)}&token=${this.apiKey()}`;
+
+    const res = await fetch(url);
+    if (res.status === 429) {
+      throw new RateLimitError('Finnhub: límite de uso alcanzado (429).');
+    }
+    if (!res.ok) {
+      this.logger.warn(`Sin perfil para ${ticker}: HTTP ${res.status}.`);
+      return null;
+    }
+
+    // Un símbolo desconocido devuelve `{}` con HTTP 200, no un error.
+    const body = (await res.json()) as Record<string, unknown>;
+    const industry = body.finnhubIndustry;
+    const country = body.country;
+    if (!industry && !country) {
+      this.logger.warn(`Sin perfil para ${ticker}: el proveedor no lo reconoce.`);
+      return null;
+    }
+
+    return {
+      ticker,
+      industry: typeof industry === 'string' && industry ? industry : null,
+      country: typeof country === 'string' && country ? country : null,
     };
   }
 }

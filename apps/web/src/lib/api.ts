@@ -151,6 +151,11 @@ export interface Diversification {
   totalInvested: string;
   byPosition: AllocationSlice[];
   byMarket: AllocationSlice[];
+  // Sector amplio del emisor. Vacío si el proveedor de perfiles no respondió.
+  bySector: AllocationSlice[];
+  // País del emisor (ISO-2), que no es el mercado donde cotiza la acción.
+  byCountry: AllocationSlice[];
+  nonUsWeight: number | null;
   concentration: {
     positionsCount: number;
     topWeight: number;

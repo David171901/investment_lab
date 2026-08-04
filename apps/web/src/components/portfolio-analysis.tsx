@@ -8,10 +8,13 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   LabelList,
   Legend,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -22,7 +25,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
   fetchDiversification,
+  fetchDividendEvents,
   fetchHistory,
+  fetchPositions,
   type ValuationBasis,
 } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
@@ -33,10 +38,33 @@ import { formatMoney } from "@/lib/format";
 const ACCENT = "#9184d9";
 const SERIES_REALIZED = "#3987e5";
 const SERIES_DIVIDENDS = "#199e70";
-const MARKET_COLORS = ["#3987e5", "#d95926", "#199e70"];
-const MARKET_OTHER = "rgba(233,233,237,0.35)";
 const AXIS = "#8b8ea0";
 const GRID = "rgba(233,233,237,0.08)";
+
+// Cinco tonos categóricos para el donut de sectores. Validados juntos contra
+// la superficie de la card: banda de luminosidad, croma, separación para
+// daltonismo (peor par ΔE 9.4 deutan), visión normal (ΔE 22.9) y contraste.
+// El orden es fijo y NO se cicla: un sexto sector cae en SECTOR_OTHER.
+const SECTOR_COLORS = [
+  "#3987e5",
+  "#d95926",
+  "#199e70",
+  "#9184d9",
+  "#b8862b",
+] as const;
+const SECTOR_OTHER = "rgba(233,233,237,0.35)";
+
+// Par divergente para rendimiento y P&L. Mismos tonos que las velas.
+const POSITIVE = "#199e70";
+const NEGATIVE = "#d95926";
+
+// Color de la superficie de la card: se usa como borde de las porciones del
+// donut para dejar el separador de 2px entre rellenos contiguos.
+const SURFACE = "#232532";
+
+function sectorColor(index: number): string {
+  return index < SECTOR_COLORS.length ? SECTOR_COLORS[index] : SECTOR_OTHER;
+}
 
 const KICKER =
   "text-xs font-medium uppercase tracking-[0.06em] text-muted-foreground";
@@ -94,6 +122,101 @@ function ChartTooltip({
   );
 }
 
+/**
+ * Barra horizontal con el extremo de dato redondeado (4px) y el extremo de la
+ * línea base recto. Recharts aplica el mismo `radius` a todas las barras, así
+ * que con valores negativos redondearía el lado equivocado: acá el lado se
+ * decide por el signo del valor.
+ */
+function DivergingBar(props: unknown) {
+  const p = props as {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    fill: string;
+    value?: number;
+  };
+  const { y, height: h, fill } = p;
+  const negative = (p.value ?? 0) < 0;
+
+  // Recharts entrega `width` NEGATIVO cuando el valor lo es (la barra crece
+  // hacia la izquierda del cero, y `x` queda sobre la línea del cero).
+  // Normalizamos a borde izquierdo + largo; sin esto el radio daba 0 y la
+  // barra se dibujaba con ancho cero, o sea invisible.
+  const w = Math.abs(p.width);
+  const x = p.width < 0 ? p.x + p.width : p.x;
+
+  const r = Math.max(0, Math.min(4, w, h / 2));
+
+  // Barra más corta que el radio: no hay lugar para la curva.
+  if (r <= 0 || w <= r) {
+    return <rect x={x} y={y} width={w} height={h} fill={fill} />;
+  }
+
+  const d = negative
+    ? // Redondeado a la izquierda (el dato crece hacia la izquierda del cero).
+      `M${x + w},${y} h${-(w - r)} a${r},${r} 0 0 0 ${-r},${r}` +
+      ` v${h - 2 * r} a${r},${r} 0 0 0 ${r},${r} h${w - r} z`
+    : // Redondeado a la derecha.
+      `M${x},${y} h${w - r} a${r},${r} 0 0 1 ${r},${r}` +
+      ` v${h - 2 * r} a${r},${r} 0 0 1 ${-r},${r} h${-(w - r)} z`;
+
+  return <path d={d} fill={fill} />;
+}
+
+/** Alto que necesita un gráfico de barras horizontales con `count` filas. */
+function barChartHeight(count: number): number {
+  return Math.max(200, count * 30 + 40);
+}
+
+/**
+ * Etiqueta de una barra divergente, siempre hacia la derecha del extremo
+ * derecho de la barra.
+ *
+ * Para una barra positiva ese extremo es la punta; para una negativa es la
+ * línea del cero, y el espacio a su derecha está garantizado vacío (esa fila no
+ * tiene barra positiva). Así la etiqueta nunca puede encimarse con el nombre de
+ * la posición en el eje.
+ *
+ * Se probaron antes las dos alternativas obvias y ambas fallan: `position`
+ * "right" de Recharts deja la etiqueta del negativo sobre el nombre del eje, y
+ * sacarla hacia afuera del extremo izquierdo obliga a un margen que hay que
+ * recalibrar cada vez que aparece una etiqueta más larga (acá se midieron 30px
+ * de solapamiento con los datos reales).
+ */
+function divergingLabel(props: unknown, format: (n: number) => string) {
+  const p = props as {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    value?: number;
+  };
+  const GAP = 6;
+
+  // Misma normalización que `DivergingBar`: con valores negativos `width` viene
+  // negativo, así que `x + width` es el borde izquierdo, no el derecho.
+  const right = p.width < 0 ? p.x : p.x + p.width;
+
+  return (
+    <text
+      x={right + GAP}
+      y={p.y + p.height / 2}
+      dy={4}
+      fill={AXIS}
+      fontSize={11}
+      textAnchor="start"
+    >
+      {format(p.value ?? 0)}
+    </text>
+  );
+}
+
+const fmtPctLabel = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+const fmtMoneyLabel = (n: number) =>
+  `${n >= 0 ? "+" : "−"}${fmtCompact(Math.abs(n))}`;
+
 function ConcentrationTile({
   label,
   value,
@@ -125,9 +248,76 @@ export function PortfolioAnalysis() {
     queryKey: ["portfolio-history"],
     queryFn: fetchHistory,
   });
+  // Envueltas en arrow: pasar la función directo haría que TanStack le mande su
+  // objeto de contexto como primer argumento.
+  const positionsQuery = useQuery({
+    queryKey: ["portfolio-positions"],
+    queryFn: () => fetchPositions(),
+  });
+  const dividendsQuery = useQuery({
+    queryKey: ["portfolio-dividends"],
+    queryFn: () => fetchDividendEvents(),
+  });
 
   const div = divQuery.data;
   const currency = div?.currency ?? "USD";
+
+  const sectorData = useMemo(
+    () =>
+      (div?.bySector ?? []).map((s) => ({
+        label: s.label,
+        weight: Number(s.weight),
+        costBasis: Number(s.costBasis),
+      })),
+    [div],
+  );
+
+  // Lo que falta para 100% son posiciones sin perfil del proveedor. Se informa
+  // en vez de repartirlo, para no inventar una clasificación que no tenemos.
+  const sectorUnclassified = useMemo(() => {
+    if (sectorData.length === 0) return 0;
+    const covered = sectorData.reduce((sum, s) => sum + s.weight, 0);
+    return Math.max(0, 100 - covered);
+  }, [sectorData]);
+
+  // Rendimiento y contribución solo aplican a posiciones con cotización.
+  const performance = useMemo(() => {
+    const rows = (positionsQuery.data ?? [])
+      .filter((p) => p.returnPct != null)
+      .map((p) => ({ label: p.symbol, returnPct: p.returnPct as number }))
+      .sort((a, b) => b.returnPct - a.returnPct);
+    return rows;
+  }, [positionsQuery.data]);
+
+  const contribution = useMemo(() => {
+    const rows = (positionsQuery.data ?? [])
+      .filter((p) => p.unrealizedPnL != null)
+      .map((p) => ({ label: p.symbol, pnl: Number(p.unrealizedPnL) }))
+      .sort((a, b) => b.pnl - a.pnl);
+    return rows;
+  }, [positionsQuery.data]);
+
+  // Posiciones abiertas sin cotización: los dos gráficos de arriba las omiten.
+  const missingQuotes = useMemo(() => {
+    const data = positionsQuery.data ?? [];
+    return data.length - data.filter((p) => p.unrealizedPnL != null).length;
+  }, [positionsQuery.data]);
+
+  // Dividendos acumulados por instrumento. Incluye posiciones ya cerradas: lo
+  // cobrado es cobrado, aunque hoy no tengas la acción.
+  const dividendsByInstrument = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const event of dividendsQuery.data ?? []) {
+      totals.set(
+        event.symbol,
+        (totals.get(event.symbol) ?? 0) + Number(event.amount),
+      );
+    }
+    return [...totals.entries()]
+      .map(([label, amount]) => ({ label, amount }))
+      .filter((d) => d.amount > 0)
+      .sort((a, b) => b.amount - a.amount);
+  }, [dividendsQuery.data]);
 
   const positionData = useMemo(
     () =>
@@ -217,7 +407,7 @@ export function PortfolioAnalysis() {
 
         {div && div.byPosition.length > 0 && (
           <>
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
               <ConcentrationTile
                 label="Posiciones abiertas"
                 value={String(div.concentration.positionsCount)}
@@ -237,6 +427,25 @@ export function PortfolioAnalysis() {
                 label="Posiciones efectivas"
                 value={div.concentration.effectivePositions.toFixed(1)}
                 sub="equivalentes equiponderadas (HHI)"
+              />
+              {/* Exposición por país del EMISOR, no por bolsa: hay empresas
+                  peruanas listadas en NYSE, y esa exposición no aparece en el
+                  sufijo de mercado de XTB. */}
+              <ConcentrationTile
+                label="Exposición no-US"
+                value={
+                  div.nonUsWeight == null
+                    ? "—"
+                    : `${div.nonUsWeight.toFixed(1)}%`
+                }
+                sub={
+                  div.nonUsWeight == null
+                    ? "sin datos de país"
+                    : div.byCountry
+                        .filter((c) => c.label !== "US")
+                        .map((c) => c.label)
+                        .join(", ") || "todo US"
+                }
               />
             </div>
 
@@ -308,50 +517,357 @@ export function PortfolioAnalysis() {
                 </CardContent>
               </Card>
 
-              {/* Por mercado */}
+              {/* Por sector — reemplaza al antiguo "Por mercado", que agrupaba
+                  por el sufijo de XTB y por eso mostraba siempre una sola
+                  categoría (todas las compras son en bolsas de EE.UU.). */}
               <Card className="py-5">
-                <CardContent className="flex flex-col gap-4">
-                  <span className={KICKER}>Por mercado</span>
-                  <div className="flex h-3 overflow-hidden rounded-full bg-white/[0.04]">
-                    {div.byMarket.map((m, i) => (
-                      <div
-                        key={m.label}
-                        style={{
-                          width: `${m.weight}%`,
-                          background:
-                            i < MARKET_COLORS.length
-                              ? MARKET_COLORS[i]
-                              : MARKET_OTHER,
-                        }}
-                        title={`${m.label} ${m.weight.toFixed(1)}%`}
-                      />
-                    ))}
-                  </div>
-                  <ul className="flex flex-col gap-2 text-sm">
-                    {div.byMarket.map((m, i) => (
-                      <li key={m.label} className="flex items-center gap-2">
-                        <span
-                          className="inline-block h-2.5 w-2.5 rounded-[3px]"
-                          style={{
-                            background:
-                              i < MARKET_COLORS.length
-                                ? MARKET_COLORS[i]
-                                : MARKET_OTHER,
-                          }}
-                        />
-                        <span>{m.label}</span>
-                        <span className="ml-auto tabular-nums text-muted-foreground">
-                          {m.weight.toFixed(1)}%
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                <CardContent className="flex flex-col gap-3">
+                  <span className={KICKER}>Por sector</span>
+
+                  {sectorData.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No hay datos de sector disponibles. Se obtienen del
+                      proveedor de cotizaciones la primera vez que se abre esta
+                      página.
+                    </p>
+                  ) : (
+                    <>
+                      <ResponsiveContainer width="100%" height={180}>
+                        <PieChart>
+                          <Pie
+                            data={sectorData}
+                            dataKey="weight"
+                            nameKey="label"
+                            innerRadius="58%"
+                            outerRadius="88%"
+                            paddingAngle={0}
+                            startAngle={90}
+                            endAngle={-270}
+                            isAnimationActive={false}
+                          >
+                            {sectorData.map((s, i) => (
+                              <Cell
+                                key={s.label}
+                                fill={sectorColor(i)}
+                                // Borde del color de la superficie: es el
+                                // separador de 2px entre porciones contiguas.
+                                stroke={SURFACE}
+                                strokeWidth={2}
+                              />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload?.length) return null;
+                              const row = payload[0]?.payload as {
+                                label: string;
+                                weight: number;
+                                costBasis: number;
+                              };
+                              return (
+                                <div className="rounded-md bg-card px-3 py-2 text-xs shadow-lg ring-1 ring-white/10">
+                                  <div className="mb-1 font-medium">
+                                    {row.label}
+                                  </div>
+                                  <div className="tabular-nums text-muted-foreground">
+                                    {row.weight.toFixed(1)}% ·{" "}
+                                    {formatMoney(row.costBasis, currency)}
+                                  </div>
+                                </div>
+                              );
+                            }}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+
+                      {/* La leyenda va siempre: el color por sí solo nunca es
+                          el único portador de la identidad de la porción. */}
+                      <ul className="flex flex-col gap-1.5 text-sm">
+                        {sectorData.map((s, i) => (
+                          <li
+                            key={s.label}
+                            className="flex items-center gap-2"
+                          >
+                            <span
+                              className="inline-block h-2.5 w-2.5 flex-none rounded-[3px]"
+                              style={{ background: sectorColor(i) }}
+                            />
+                            <span className="truncate" title={s.label}>
+                              {s.label}
+                            </span>
+                            <span className="ml-auto flex-none tabular-nums text-muted-foreground">
+                              {s.weight.toFixed(1)}%
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+
+                      {sectorUnclassified > 0.05 && (
+                        <p className="text-[12px] text-muted-foreground">
+                          {sectorUnclassified.toFixed(1)}% sin clasificar (el
+                          proveedor no reconoce el instrumento).
+                        </p>
+                      )}
+                    </>
+                  )}
                 </CardContent>
               </Card>
             </div>
           </>
         )}
       </section>
+
+      {/* Rendimiento de las posiciones abiertas */}
+      <section className="flex flex-col gap-5">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-xl font-medium">Rendimiento</h2>
+          <p className="text-[13px] text-muted-foreground">
+            Posiciones abiertas, sobre el precio de mercado actual
+          </p>
+        </div>
+
+        {positionsQuery.isError && (
+          <p className="text-negative">No se pudieron cargar las posiciones.</p>
+        )}
+
+        {performance.length === 0 && contribution.length === 0 ? (
+          !positionsQuery.isLoading && (
+            <Card className="py-4">
+              <CardContent>
+                <p className="text-sm text-muted-foreground">
+                  Sin cotizaciones disponibles, no hay rendimiento que mostrar.
+                </p>
+              </CardContent>
+            </Card>
+          )
+        ) : (
+          <>
+            {missingQuotes > 0 && (
+              <p className="text-[13px] text-muted-foreground">
+                {missingQuotes} posición(es) sin cotización quedan fuera de
+                estos gráficos.
+              </p>
+            )}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {/* Rendimiento % — responde "qué está funcionando" */}
+              <Card className="py-5">
+                <CardContent className="flex flex-col gap-3">
+                  <span className={KICKER}>Rendimiento por posición</span>
+                  <ResponsiveContainer
+                    width="100%"
+                    height={barChartHeight(performance.length)}
+                  >
+                    <BarChart
+                      data={performance}
+                      layout="vertical"
+                      margin={{ top: 4, right: 44, bottom: 4, left: 12 }}
+                    >
+                      <CartesianGrid horizontal={false} stroke={GRID} />
+                      <XAxis
+                        type="number"
+                        tickFormatter={(v) => `${v}%`}
+                        tick={{ fill: AXIS, fontSize: 12 }}
+                        axisLine={{ stroke: GRID }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="label"
+                        width={74}
+                        tick={{ fill: AXIS, fontSize: 12 }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <ReferenceLine x={0} stroke="rgba(233,233,237,0.25)" />
+                      <Tooltip
+                        cursor={{ fill: "rgba(255,255,255,0.04)" }}
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const row = payload[0]?.payload as {
+                            returnPct: number;
+                          };
+                          return (
+                            <div className="rounded-md bg-card px-3 py-2 text-xs shadow-lg ring-1 ring-white/10">
+                              <div className="mb-1 font-medium">{label}</div>
+                              <div className="tabular-nums text-muted-foreground">
+                                {row.returnPct >= 0 ? "+" : ""}
+                                {row.returnPct.toFixed(2)}%
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Bar
+                        dataKey="returnPct"
+                        shape={DivergingBar}
+                        maxBarSize={18}
+                        isAnimationActive={false}
+                      >
+                        {performance.map((p) => (
+                          <Cell
+                            key={p.label}
+                            fill={p.returnPct >= 0 ? POSITIVE : NEGATIVE}
+                          />
+                        ))}
+                        <LabelList
+                          dataKey="returnPct"
+                          content={(props) => divergingLabel(props, fmtPctLabel)}
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              {/* Contribución en dinero — un +40% sobre una posición chica mueve
+                  menos plata que un +8% sobre la más grande. */}
+              <Card className="py-5">
+                <CardContent className="flex flex-col gap-3">
+                  <span className={KICKER}>Contribución al P&amp;L</span>
+                  <ResponsiveContainer
+                    width="100%"
+                    height={barChartHeight(contribution.length)}
+                  >
+                    <BarChart
+                      data={contribution}
+                      layout="vertical"
+                      margin={{ top: 4, right: 52, bottom: 4, left: 12 }}
+                    >
+                      <CartesianGrid horizontal={false} stroke={GRID} />
+                      <XAxis
+                        type="number"
+                        tickFormatter={fmtCompact}
+                        tick={{ fill: AXIS, fontSize: 12 }}
+                        axisLine={{ stroke: GRID }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="label"
+                        width={74}
+                        tick={{ fill: AXIS, fontSize: 12 }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <ReferenceLine x={0} stroke="rgba(233,233,237,0.25)" />
+                      <Tooltip
+                        cursor={{ fill: "rgba(255,255,255,0.04)" }}
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const row = payload[0]?.payload as { pnl: number };
+                          return (
+                            <div className="rounded-md bg-card px-3 py-2 text-xs shadow-lg ring-1 ring-white/10">
+                              <div className="mb-1 font-medium">{label}</div>
+                              <div className="tabular-nums text-muted-foreground">
+                                {row.pnl >= 0 ? "+" : "−"}
+                                {formatMoney(Math.abs(row.pnl), currency)}
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Bar
+                        dataKey="pnl"
+                        shape={DivergingBar}
+                        maxBarSize={18}
+                        isAnimationActive={false}
+                      >
+                        {contribution.map((c) => (
+                          <Cell
+                            key={c.label}
+                            fill={c.pnl >= 0 ? POSITIVE : NEGATIVE}
+                          />
+                        ))}
+                        <LabelList
+                          dataKey="pnl"
+                          content={(props) => divergingLabel(props, fmtMoneyLabel)}
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* Dividendos por instrumento */}
+      {dividendsByInstrument.length > 0 && (
+        <section className="flex flex-col gap-5">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="text-xl font-medium">Dividendos</h2>
+            <p className="text-[13px] text-muted-foreground">
+              Total cobrado por instrumento — incluye posiciones ya cerradas
+            </p>
+          </div>
+
+          <Card className="py-5">
+            <CardContent className="flex flex-col gap-3">
+              <span className={KICKER}>Cobrado por instrumento</span>
+              <ResponsiveContainer
+                width="100%"
+                height={barChartHeight(dividendsByInstrument.length)}
+              >
+                <BarChart
+                  data={dividendsByInstrument}
+                  layout="vertical"
+                  margin={{ top: 4, right: 56, bottom: 4, left: 4 }}
+                >
+                  <CartesianGrid horizontal={false} stroke={GRID} />
+                  <XAxis
+                    type="number"
+                    tickFormatter={fmtCompact}
+                    tick={{ fill: AXIS, fontSize: 12 }}
+                    axisLine={{ stroke: GRID }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="label"
+                    width={84}
+                    tick={{ fill: AXIS, fontSize: 12 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <Tooltip
+                    cursor={{ fill: "rgba(255,255,255,0.04)" }}
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const row = payload[0]?.payload as { amount: number };
+                      return (
+                        <div className="rounded-md bg-card px-3 py-2 text-xs shadow-lg ring-1 ring-white/10">
+                          <div className="mb-1 font-medium">{label}</div>
+                          <div className="tabular-nums text-muted-foreground">
+                            {formatMoney(row.amount, currency)}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Bar
+                    dataKey="amount"
+                    fill={SERIES_DIVIDENDS}
+                    radius={[0, 4, 4, 0]}
+                    maxBarSize={18}
+                    isAnimationActive={false}
+                  >
+                    <LabelList
+                      dataKey="amount"
+                      position="right"
+                      formatter={(v) =>
+                        v == null ? "" : formatMoney(Number(v), currency)
+                      }
+                      fill={AXIS}
+                      fontSize={11}
+                    />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </section>
+      )}
 
       {/* Evolución */}
       <section className="flex flex-col gap-5">

@@ -41,6 +41,23 @@ model Instrument {
   // corregir a mano los casos donde esa derivación no da el ticker real.
   externalTicker String?
 
+  // Perfil de la empresa según el proveedor (Fase 3.6). Se cachean acá y no en
+  // tabla aparte porque es 1:1 con el instrumento y casi nunca cambia: el
+  // sector de una empresa no se mueve en años.
+  //
+  // `industry` es lo que devuelve el proveedor tal cual (granular, ~150
+  // valores posibles); `sector` es el resultado de agruparlo con la tabla de
+  // `sectors.ts`. Guardamos los dos para poder recategorizar sin volver a
+  // pedirle nada al proveedor.
+  industry String?
+  sector   String?
+  // País del emisor (ISO-2). No es el mercado donde cotiza: BAP y BVN cotizan
+  // en NYSE pero son peruanas, y esa exposición no se ve en el sufijo de XTB.
+  country  String?
+  // Base del TTL. Se setea aunque el proveedor no devuelva nada, para no
+  // reintentar en cada carga un ticker que no reconoce.
+  profileFetchedAt DateTime?
+
   operations  Operation[]
   quote       Quote?
   candleCache CandleCache?

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { QuotesService, type QuoteDto } from '../quotes/quotes.service';
+import { ProfilesService } from '../quotes/profiles.service';
 import { Prisma } from '../../generated/prisma/client';
 
 const D = Prisma.Decimal;
@@ -9,6 +10,10 @@ type DecimalValue = Prisma.Decimal;
 // Umbral por debajo del cual una cantidad se considera cero (XTB opera con
 // fracciones, y tras compras/ventas pueden quedar residuos por redondeo).
 const EPSILON = new D('0.00000001');
+
+// Por debajo de esta fracción del valor de mercado, el costo base se considera
+// despreciable y no se reporta rendimiento porcentual. Ver `toPositionDto`.
+const NEGLIGIBLE_COST_RATIO = new D('0.01');
 
 export interface PositionDto {
   symbol: string;
@@ -94,6 +99,15 @@ export interface DiversificationDto {
   totalInvested: string;
   byPosition: AllocationSliceDto[];
   byMarket: AllocationSliceDto[];
+  // Reparto por sector amplio del emisor (Fase 3.6). Vacío si no hay proveedor
+  // configurado o si todavía no se pudo obtener ningún perfil.
+  bySector: AllocationSliceDto[];
+  // Reparto por país del emisor, que NO es el mercado donde cotiza: hay
+  // empresas peruanas listadas en NYSE, y esa exposición no se ve en `market`.
+  byCountry: AllocationSliceDto[];
+  // Peso agregado de los emisores fuera de Estados Unidos, en porcentaje.
+  // null cuando no hay datos de país para ninguna posición.
+  nonUsWeight: number | null;
   concentration: {
     positionsCount: number;
     topWeight: number; // % de la posición más grande
@@ -163,6 +177,7 @@ export class PortfolioService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly quotes: QuotesService,
+    private readonly profiles: ProfilesService,
   ) {}
 
   /** Posiciones abiertas del portafolio (cantidad neta > 0). */
@@ -189,9 +204,24 @@ export class PortfolioService {
       marketPrice = new D(quote.price);
       marketValue = acc.quantity.times(marketPrice);
       unrealizedPnL = marketValue.minus(costBasis);
-      // Un costo base ~0 (ej. un spinoff que entró casi gratis) haría explotar
-      // el porcentaje; en ese caso no se reporta rendimiento relativo.
-      returnPct = costBasis.abs().lessThanOrEqualTo(EPSILON)
+
+      // Un costo base despreciable hace explotar el porcentaje. El caso real es
+      // FDXF.US, un spinoff que entró a $0,00279: su rendimiento da +1.390.100%,
+      // que es correcto pero no informa nada, y en un gráfico comparativo
+      // aplasta al resto de las barras hasta volverlas invisibles.
+      //
+      // El umbral es relativo al propio valor de mercado de la posición —"no
+      // pagaste prácticamente nada por esto"— en vez de un absoluto arbitrario.
+      // Separa con holgura: FDXF queda en 0,007% y la siguiente posición más
+      // barata en ~80%.
+      //
+      // Solo se anula el porcentaje. El P&L en dinero se sigue reportando,
+      // porque esos $38 sí son reales y sí se pueden comparar.
+      const negligibleCost =
+        costBasis.abs().lessThanOrEqualTo(EPSILON) ||
+        costBasis.abs().lessThan(marketValue.abs().times(NEGLIGIBLE_COST_RATIO));
+
+      returnPct = negligibleCost
         ? null
         : Number(unrealizedPnL.dividedBy(costBasis).times(100));
     }
@@ -346,6 +376,10 @@ export class PortfolioService {
         ? await this.quotes.getQuotes(openAccs)
         : new Map<string, QuoteDto>();
 
+    // Los perfiles (sector/país) van en paralelo a las cotizaciones: no
+    // dependen entre sí y ambos tienen su propio cache.
+    const profiles = await this.profiles.getProfiles(openAccs);
+
     const open = openAccs
       .map((acc) => {
         const quote = quotes.get(acc.instrumentId);
@@ -354,7 +388,14 @@ export class PortfolioService {
           basis === 'market' && quote
             ? acc.quantity.times(new D(quote.price))
             : acc.quantity.times(acc.averageCost);
-        return { symbol: acc.symbol, market: acc.market, costBasis: value };
+        const profile = profiles.get(acc.instrumentId);
+        return {
+          symbol: acc.symbol,
+          market: acc.market,
+          costBasis: value,
+          sector: profile?.sector ?? null,
+          country: profile?.country ?? null,
+        };
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
 
@@ -388,6 +429,37 @@ export class PortfolioService {
       }))
       .sort((a, b) => Number(b.costBasis) - Number(a.costBasis));
 
+    // Reparto por sector y por país del emisor. Las posiciones sin perfil no
+    // se fuerzan a una categoría inventada: quedan fuera, y el peso que falta
+    // para llegar a 100% es lo que la UI reporta como "sin clasificar".
+    const groupBy = (
+      key: (p: (typeof open)[number]) => string | null,
+    ): AllocationSliceDto[] => {
+      const totals = new Map<string, DecimalValue>();
+      for (const p of open) {
+        const k = key(p);
+        if (!k) continue;
+        totals.set(k, (totals.get(k) ?? new D(0)).plus(p.costBasis));
+      }
+      return [...totals.entries()]
+        .map(([label, cb]) => ({
+          label,
+          market: null,
+          costBasis: cb.toString(),
+          weight: weightPct(cb),
+        }))
+        .sort((a, b) => Number(b.costBasis) - Number(a.costBasis));
+    };
+
+    const bySector = groupBy((p) => p.sector);
+    const byCountry = groupBy((p) => p.country);
+    const nonUsWeight =
+      byCountry.length === 0
+        ? null
+        : byCountry
+            .filter((c) => c.label !== 'US')
+            .reduce((sum, c) => sum + c.weight, 0);
+
     // Fracciones (0..1) para los indicadores de concentración.
     const fractions = open
       .map((p) => (total.isZero() ? 0 : Number(p.costBasis.dividedBy(total))))
@@ -402,6 +474,9 @@ export class PortfolioService {
       totalInvested: total.toString(),
       byPosition,
       byMarket,
+      bySector,
+      byCountry,
+      nonUsWeight,
       concentration: {
         positionsCount: open.length,
         topWeight,
