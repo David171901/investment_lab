@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { XtbUpdateCard } from "@/components/xtb-update-card";
 import { cn } from "@/lib/utils";
 import {
   fetchDividendEvents,
@@ -226,6 +227,10 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+
+      {/* 2a. Actualización del archivo de XTB (Fase 4.5). Va acá, antes de la
+          valuación, porque es lo que hace que todo lo de abajo esté al día. */}
+      <XtbUpdateCard />
 
       {/* 2b. Valuación a mercado (Fase 3.5) — fila aparte para no alterar la
           grilla de hero-stats; si no hay cotizaciones muestra cómo activarlas. */}

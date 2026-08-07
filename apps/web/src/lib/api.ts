@@ -16,10 +16,42 @@ export interface Operation {
   };
 }
 
+export interface ParseError {
+  sheet: string;
+  row: number;
+  message: string;
+}
+
+// Resultado de una importación ya aplicada (Fase 4.5: reemplazo total).
 export interface ImportSummary {
-  created: number;
-  skippedExisting: number;
-  errors: { sheet: string; row: number; message: string }[];
+  operationsBefore: number;
+  operationsAfter: number;
+  added: number;
+  removed: number;
+  kept: number;
+  duplicatesInFile: number;
+  errors: ParseError[];
+}
+
+// Qué pasaría al importar, sin escribir nada.
+export interface ImportPreview {
+  operationsInFile: number;
+  operationsInDb: number;
+  added: number;
+  removed: number;
+  kept: number;
+  duplicatesInFile: number;
+  errors: ParseError[];
+  warnsLargeDeletion: boolean;
+}
+
+export interface LastImportRun {
+  fileName: string;
+  importedAt: string;
+  operationsBefore: number;
+  operationsAfter: number;
+  status: "OK" | "FAILED";
+  errorCount: number;
 }
 
 export async function fetchOperations(): Promise<Operation[]> {
@@ -28,20 +60,37 @@ export async function fetchOperations(): Promise<Operation[]> {
   return res.json();
 }
 
-export async function importXtbFile(file: File): Promise<ImportSummary> {
+async function postXtbFile<T>(path: string, file: File): Promise<T> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(`${API_URL}/import/xtb`, {
+  const res = await fetch(`${API_URL}${path}`, {
     method: "POST",
     body: formData,
   });
 
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(body?.message ?? "Error al importar el archivo.");
+    throw new Error(body?.message ?? "Error al procesar el archivo.");
   }
 
+  return res.json();
+}
+
+// Consulta qué cambiaría, sin escribir. El archivo se sube dos veces (una por
+// paso del flujo) a propósito: evita guardar archivos temporales en el servidor.
+export async function previewXtbImport(file: File): Promise<ImportPreview> {
+  return postXtbFile<ImportPreview>("/import/xtb/preview", file);
+}
+
+// OJO: reemplaza TODAS las operaciones por las del archivo.
+export async function importXtbFile(file: File): Promise<ImportSummary> {
+  return postXtbFile<ImportSummary>("/import/xtb", file);
+}
+
+export async function fetchLastImportRun(): Promise<LastImportRun | null> {
+  const res = await fetch(`${API_URL}/import/last-run`);
+  if (!res.ok) throw new Error("No se pudo cargar la última importación.");
   return res.json();
 }
 

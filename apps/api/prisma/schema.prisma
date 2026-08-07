@@ -104,3 +104,25 @@ model CandleCache {
 
   instrument Instrument @relation(fields: [instrumentId], references: [id])
 }
+
+enum ImportStatus {
+  OK
+  FAILED
+}
+
+// Bitácora de importaciones de archivos de XTB (Fase 4.5). No participa del
+// modelo de dominio: no tiene relaciones y nada se deriva de ella. Existe para
+// poder responder "¿cuándo actualicé por última vez?" y para dejar rastro de
+// las importaciones que fallaron, que por definición no dejan ningún otro.
+model ImportRun {
+  id       String   @id @default(cuid())
+  fileName String
+  importedAt DateTime @default(now())
+  // Conteo de operaciones antes y después del reemplazo. En una importación
+  // fallida son iguales, porque la transacción revierte.
+  operationsBefore Int
+  operationsAfter  Int
+  // Errores de parseo por fila (array de {sheet, row, message}).
+  errors   Json
+  status   ImportStatus
+}
