@@ -126,17 +126,24 @@ export class FinnhubProvider {
 
     // Un símbolo desconocido devuelve `{}` con HTTP 200, no un error.
     const body = (await res.json()) as Record<string, unknown>;
-    const industry = body.finnhubIndustry;
-    const country = body.country;
-    if (!industry && !country) {
+    const text = (value: unknown): string | null =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
+
+    const industry = text(body.finnhubIndustry);
+    const country = text(body.country);
+    const name = text(body.name);
+    if (!industry && !country && !name) {
       this.logger.warn(`Sin perfil para ${ticker}: el proveedor no lo reconoce.`);
       return null;
     }
 
     return {
       ticker,
-      industry: typeof industry === 'string' && industry ? industry : null,
-      country: typeof country === 'string' && country ? country : null,
+      name,
+      industry,
+      country,
+      // No todos los emisores tienen logo: los chicos suelen venir sin él.
+      logoUrl: text(body.logo),
     };
   }
 }

@@ -31,9 +31,13 @@ export interface ProviderCandle {
  */
 export interface ProviderProfile {
   ticker: string;
+  /** Nombre comercial de la empresa (ej. "Alphabet Inc"). */
+  name: string | null;
   industry: string | null;
   /** País del emisor en ISO-2 (`US`, `PE`, ...). */
   country: string | null;
+  /** URL del logo servido por el proveedor. Null si no tiene. */
+  logoUrl: string | null;
 }
 
 /** El proveedor rechazó por exceso de uso; hay que dejar de pedirle un rato. */

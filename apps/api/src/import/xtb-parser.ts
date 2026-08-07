@@ -26,21 +26,42 @@ export interface ParseResult {
 
 type SheetRow = unknown[];
 
-const CLOSED_POSITIONS_SHEET = 'CLOSED POSITION HISTORY';
-const CASH_OPERATIONS_SHEET = 'CASH OPERATION HISTORY';
-const OPEN_POSITIONS_SHEET_PREFIX = 'OPEN POSITION';
+const CLOSED_POSITIONS_SHEET = 'Closed Positions';
+const OPEN_POSITIONS_SHEET = 'Open Positions';
+const CASH_OPERATIONS_SHEET = 'Cash Operations';
 
+// La columna que identifica la posición se llama distinto en cada hoja.
+const CLOSED_POSITION_ID_COLUMN = 'Position ID';
+const OPEN_POSITION_ID_COLUMN = 'Instrument/Position';
+
+// El tipo con el que XTB marca los dividendos en la hoja de caja. En el formato
+// anterior venía con un typo del propio broker ("DIVIDENT"), ya corregido.
+const DIVIDEND_TYPE = 'dividend';
+
+/**
+ * Parser del export .xlsx de XTB.
+ *
+ * Escrito para el formato vigente desde agosto de 2026 (hojas `Closed
+ * Positions`, `Open Positions` y `Cash Operations`). El formato anterior
+ * —hojas en mayúsculas con sufijo de fecha, fechas `dd/mm/yyyy`— **ya no se
+ * admite**: fue una decisión explícita para no arrastrar dos gramáticas, dado
+ * que el export nuevo trae el historial completo.
+ */
 export function parseXtbWorkbook(buffer: Buffer): ParseResult {
-  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  // NO se usa `cellDates: true` a propósito. Las columnas de fecha vienen
+  // documentadas como UTC, pero esa opción interpreta el número de serie de
+  // Excel como hora LOCAL y devuelve un Date corrido por el offset de la
+  // máquina: en Lima (UTC-5), 16:19:03 UTC se convierte en 21:19:38Z.
+  // Leyendo con `raw: false` se toma el texto ya formateado por la planilla,
+  // que sí respeta el UTC declarado en la cabecera de la columna.
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
 
-  const openSheetName = workbook.SheetNames.find((name) =>
-    name.trim().startsWith(OPEN_POSITIONS_SHEET_PREFIX),
-  );
+  const missingSheets = [
+    CLOSED_POSITIONS_SHEET,
+    OPEN_POSITIONS_SHEET,
+    CASH_OPERATIONS_SHEET,
+  ].filter((name) => !workbook.SheetNames.includes(name));
 
-  const missingSheets: string[] = [];
-  if (!workbook.SheetNames.includes(CLOSED_POSITIONS_SHEET)) missingSheets.push(CLOSED_POSITIONS_SHEET);
-  if (!openSheetName) missingSheets.push(`${OPEN_POSITIONS_SHEET_PREFIX} *`);
-  if (!workbook.SheetNames.includes(CASH_OPERATIONS_SHEET)) missingSheets.push(CASH_OPERATIONS_SHEET);
   if (missingSheets.length > 0) {
     throw new Error(
       `El archivo no tiene el formato esperado de export de XTB. Faltan las hojas: ${missingSheets.join(', ')}.`,
@@ -48,16 +69,30 @@ export function parseXtbWorkbook(buffer: Buffer): ParseResult {
   }
 
   const closedRows = sheetToRows(workbook, CLOSED_POSITIONS_SHEET);
-  const openRows = sheetToRows(workbook, openSheetName as string);
+  const openRows = sheetToRows(workbook, OPEN_POSITIONS_SHEET);
   const cashRows = sheetToRows(workbook, CASH_OPERATIONS_SHEET);
 
-  const currency = findAccountCurrency(closedRows);
+  const currency = findAccountCurrency([closedRows, openRows, cashRows]);
 
   const operations: ParsedOperation[] = [];
   const errors: ParseError[] = [];
 
-  parsePositionsSheet(CLOSED_POSITIONS_SHEET, closedRows, currency, operations, errors);
-  parsePositionsSheet(openSheetName as string, openRows, currency, operations, errors);
+  parsePositionsSheet(
+    CLOSED_POSITIONS_SHEET,
+    closedRows,
+    CLOSED_POSITION_ID_COLUMN,
+    currency,
+    operations,
+    errors,
+  );
+  parsePositionsSheet(
+    OPEN_POSITIONS_SHEET,
+    openRows,
+    OPEN_POSITION_ID_COLUMN,
+    currency,
+    operations,
+    errors,
+  );
   parseDividends(cashRows, currency, operations, errors);
 
   return { operations, errors };
@@ -71,10 +106,21 @@ function sheetToRows(workbook: XLSX.WorkBook, sheetName: string): SheetRow[] {
   });
 }
 
-function findAccountCurrency(rows: SheetRow[]): string {
-  for (let i = 0; i < rows.length - 1; i++) {
-    const idx = rows[i].findIndex((cell) => String(cell).trim() === 'Currency');
-    if (idx !== -1) {
+function normalize(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+/**
+ * Moneda de la cuenta. Aparece en un bloque de resumen con el rótulo
+ * "Currency" y el valor en la fila de abajo; en el formato actual ese bloque
+ * solo está en `Open Positions`, así que se buscan todas las hojas en vez de
+ * asumir una.
+ */
+function findAccountCurrency(sheets: SheetRow[][]): string {
+  for (const rows of sheets) {
+    for (let i = 0; i < rows.length - 1; i++) {
+      const idx = rows[i].findIndex((cell) => normalize(cell) === 'currency');
+      if (idx === -1) continue;
       const value = String(rows[i + 1]?.[idx] ?? '').trim();
       if (value) return value;
     }
@@ -82,13 +128,35 @@ function findAccountCurrency(rows: SheetRow[]): string {
   throw new Error('No se pudo determinar la moneda de la cuenta en el archivo.');
 }
 
+/**
+ * Índice de columnas por nombre normalizado. La normalización no es cosmética:
+ * XTB capitaliza distinto la misma columna según la hoja ("Open Price" en
+ * cerradas, "Open price" en abiertas).
+ */
 function buildColumnIndex(header: SheetRow): Record<string, number> {
   const map: Record<string, number> = {};
   header.forEach((name, idx) => {
-    const key = String(name).trim();
+    const key = normalize(name);
     if (key && !(key in map)) map[key] = idx;
   });
   return map;
+}
+
+/** Fila de encabezado: la primera que contenga `key` en cualquier columna. */
+function findHeaderRow(rows: SheetRow[], key: string): number {
+  const target = normalize(key);
+  return rows.findIndex((row) =>
+    row.some((cell) => normalize(cell) === target),
+  );
+}
+
+function cellAt(
+  row: SheetRow,
+  columns: Record<string, number>,
+  name: string,
+): unknown {
+  const idx = columns[normalize(name)];
+  return idx === undefined ? '' : row[idx];
 }
 
 function parseAmount(raw: unknown): number {
@@ -103,53 +171,73 @@ function parseAmount(raw: unknown): number {
   return value;
 }
 
+/**
+ * Fechas del export: `YYYY-MM-DD HH:mm:ss`, en UTC según la cabecera de cada
+ * columna. Se construyen con `Date.UTC` para no depender de la zona horaria de
+ * la máquina que corre la importación.
+ */
 function parseXtbDate(raw: unknown): Date {
   const match = String(raw)
     .trim()
-    .match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
+    .match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
   if (!match) {
     throw new Error(`Fecha inválida: "${raw}"`);
   }
-  const [, day, month, year, hour, minute, second] = match;
+  const [, year, month, day, hour, minute, second] = match;
   return new Date(Date.UTC(+year, +month - 1, +day, +hour, +minute, +second));
 }
 
 function parsePositionsSheet(
   sheetName: string,
   rows: SheetRow[],
+  positionIdColumn: string,
   currency: string,
   operations: ParsedOperation[],
   errors: ParseError[],
 ): void {
-  const headerIdx = rows.findIndex((row) => String(row[0]).trim() === 'Position');
+  const headerIdx = findHeaderRow(rows, positionIdColumn);
   if (headerIdx === -1) {
-    errors.push({ sheet: sheetName, row: 0, message: 'No se encontró la fila de encabezado ("Position").' });
+    errors.push({
+      sheet: sheetName,
+      row: 0,
+      message: `No se encontró la fila de encabezado ("${positionIdColumn}").`,
+    });
     return;
   }
   const columns = buildColumnIndex(rows[headerIdx]);
 
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
-    const positionId = String(row[columns['Position']] ?? '').trim();
-    const type = String(row[columns['Type']] ?? '').trim().toUpperCase();
+    const positionId = String(cellAt(row, columns, positionIdColumn)).trim();
+    const type = String(cellAt(row, columns, 'Type')).trim().toUpperCase();
 
+    // Descarta de un saque las filas que no son operaciones: en `Open
+    // Positions` hay una fila de resumen por instrumento (con el nombre de la
+    // empresa y el tipo vacío) y en `Cash Operations` una fila "Total".
     if (!positionId || (type !== 'BUY' && type !== 'SELL')) continue;
 
     try {
-      const symbol = String(row[columns['Symbol']] ?? '').trim();
-      if (!symbol) throw new Error('Symbol vacío');
+      const symbol = String(cellAt(row, columns, 'Ticker')).trim();
+      if (!symbol) throw new Error('Ticker vacío');
 
-      const volume = Math.abs(parseAmount(row[columns['Volume']]));
-      const openPrice = Math.abs(parseAmount(row[columns['Open price']]));
-      const openTime = parseXtbDate(row[columns['Open time']]);
-      const commission = 'Commission' in columns ? Math.abs(parseAmount(row[columns['Commission']])) : 0;
+      const volume = Math.abs(parseAmount(cellAt(row, columns, 'Volume')));
+      const openPrice = Math.abs(
+        parseAmount(cellAt(row, columns, 'Open price')),
+      );
+      const openTime = parseXtbDate(cellAt(row, columns, 'Open time (UTC)'));
+
+      const commissionRaw = cellAt(row, columns, 'Commission');
+      const commission =
+        String(commissionRaw).trim() === ''
+          ? 0
+          : Math.abs(parseAmount(commissionRaw));
 
       const openLegType: ParsedOperationType = type === 'BUY' ? 'BUY' : 'SELL';
       const closeLegType: ParsedOperationType = type === 'BUY' ? 'SELL' : 'BUY';
 
-      // Una misma Position ID puede repetirse en varias filas cuando XTB registra
-      // cierres parciales: cada fila es su propia porción (volumen distinto) del
-      // mismo Position ID, con el mismo Open time/price. El volumen distingue las filas.
+      // Una misma Position ID puede repetirse en varias filas cuando XTB
+      // registra cierres parciales: cada fila es su propia porción (volumen
+      // distinto) de la misma posición. El volumen distingue las filas.
       const rowKey = `${positionId}-${volume.toFixed(4)}`;
 
       operations.push({
@@ -163,15 +251,16 @@ function parsePositionsSheet(
         currency,
       });
 
-      const closeTimeRaw = row[columns['Close time']];
+      const closeTimeRaw = cellAt(row, columns, 'Close time (UTC)');
       if (closeTimeRaw && String(closeTimeRaw).trim()) {
-        const closePrice = Math.abs(parseAmount(row[columns['Close price']]));
-        const closeTime = parseXtbDate(closeTimeRaw);
+        const closePrice = Math.abs(
+          parseAmount(cellAt(row, columns, 'Close price')),
+        );
         operations.push({
           externalId: `xtb-pos-${rowKey}-close`,
           type: closeLegType,
           symbol,
-          date: closeTime,
+          date: parseXtbDate(closeTimeRaw),
           quantity: volume,
           price: closePrice,
           commission: 0,
@@ -195,30 +284,36 @@ function parseDividends(
   errors: ParseError[],
 ): void {
   const sheetName = CASH_OPERATIONS_SHEET;
-  const headerIdx = rows.findIndex((row) => String(row[0]).trim() === 'ID');
+  const headerIdx = findHeaderRow(rows, 'ID');
   if (headerIdx === -1) {
-    errors.push({ sheet: sheetName, row: 0, message: 'No se encontró la fila de encabezado ("ID").' });
+    errors.push({
+      sheet: sheetName,
+      row: 0,
+      message: 'No se encontró la fila de encabezado ("ID").',
+    });
     return;
   }
   const columns = buildColumnIndex(rows[headerIdx]);
 
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
-    const id = String(row[columns['ID']] ?? '').trim();
-    const type = String(row[columns['Type']] ?? '').trim();
+    const id = String(cellAt(row, columns, 'ID')).trim();
+    const type = normalize(cellAt(row, columns, 'Type'));
 
-    if (!id || type !== 'DIVIDENT') continue;
+    // La hoja trae también compras, ventas, retenciones, comisiones y una fila
+    // "Total": solo interesan los dividendos.
+    if (!id || type !== DIVIDEND_TYPE) continue;
 
     try {
-      // El export de XTB a veces deja la columna Symbol vacía para dividendos;
-      // en ese caso el símbolo aparece como primer token del Comment (ej. "PEP.US USD 1.48/ SHR").
+      // Si el ticker viniera vacío, el símbolo aparece como primer token del
+      // comentario (ej. "PEP.US USD 1.48/ SHR").
       const symbol =
-        String(row[columns['Symbol']] ?? '').trim() ||
-        String(row[columns['Comment']] ?? '').trim().split(/\s+/)[0];
-      if (!symbol) throw new Error('Symbol vacío');
+        String(cellAt(row, columns, 'Ticker')).trim() ||
+        String(cellAt(row, columns, 'Comment')).trim().split(/\s+/)[0];
+      if (!symbol) throw new Error('Ticker vacío');
 
-      const amount = parseAmount(row[columns['Amount']]);
-      const date = parseXtbDate(row[columns['Time']]);
+      const amount = parseAmount(cellAt(row, columns, 'Amount'));
+      const date = parseXtbDate(cellAt(row, columns, 'Time'));
 
       operations.push({
         externalId: `xtb-cash-${id}`,

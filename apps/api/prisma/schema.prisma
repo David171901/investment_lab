@@ -54,6 +54,9 @@ model Instrument {
   // País del emisor (ISO-2). No es el mercado donde cotiza: BAP y BVN cotizan
   // en NYSE pero son peruanas, y esa exposición no se ve en el sufijo de XTB.
   country  String?
+  // URL del logo de la empresa, servida por el propio proveedor. Null cuando no
+  // tiene uno (pasa con emisores chicos, ej. BVN.US).
+  logoUrl  String?
   // Base del TTL. Se setea aunque el proveedor no devuelva nada, para no
   // reintentar en cada carga un ticker que no reconoce.
   profileFetchedAt DateTime?

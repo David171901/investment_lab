@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
-import { XtbUpdateCard } from "@/components/xtb-update-card";
 import {
   Table,
   TableBody,
@@ -44,8 +43,6 @@ export default function OperacionesPage() {
           Historial importado desde XTB
         </span>
       </nav>
-
-      <XtbUpdateCard />
 
       {operationsQuery.isLoading && <p>Cargando operaciones...</p>}
       {operationsQuery.isError && (

@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { QuotesService, type QuoteDto } from '../quotes/quotes.service';
-import { ProfilesService } from '../quotes/profiles.service';
+import { ProfilesService, type ProfileDto } from '../quotes/profiles.service';
 import { Prisma } from '../../generated/prisma/client';
 
 const D = Prisma.Decimal;
@@ -17,7 +17,11 @@ const NEGLIGIBLE_COST_RATIO = new D('0.01');
 
 export interface PositionDto {
   symbol: string;
+  // Nombre de la empresa. Cae al `symbol` mientras el proveedor de perfiles no
+  // haya respondido — el export de XTB no trae el nombre.
   name: string;
+  // Logo servido por el proveedor. Null cuando el emisor no tiene uno.
+  logoUrl: string | null;
   market: string | null;
   currency: string;
   quantity: string;
@@ -192,6 +196,7 @@ export class PortfolioService {
   private toPositionDto(
     acc: InstrumentAccumulator,
     quote: QuoteDto | undefined,
+    profile?: ProfileDto,
   ): PositionDto {
     const costBasis = acc.quantity.times(acc.averageCost);
 
@@ -228,7 +233,8 @@ export class PortfolioService {
 
     return {
       symbol: acc.symbol,
-      name: acc.name,
+      name: profile?.name ?? acc.name,
+      logoUrl: profile?.logoUrl ?? null,
       market: acc.market,
       currency: acc.currency,
       quantity: acc.quantity.toString(),
@@ -250,10 +256,22 @@ export class PortfolioService {
   async getPositions(refresh = false): Promise<PositionDto[]> {
     const { accumulators } = await this.compute();
     const open = this.openPositions(accumulators);
-    const quotes = await this.quotes.getQuotes(open, refresh);
+    // Cotizaciones y perfiles son independientes y cada uno tiene su cache; el
+    // de perfiles tiene TTL de 30 días, así que después de la primera carga
+    // esto no cuesta ninguna llamada al proveedor.
+    const [quotes, profiles] = await Promise.all([
+      this.quotes.getQuotes(open, refresh),
+      this.profiles.getProfiles(open),
+    ]);
 
     return open
-      .map((acc) => this.toPositionDto(acc, quotes.get(acc.instrumentId)))
+      .map((acc) =>
+        this.toPositionDto(
+          acc,
+          quotes.get(acc.instrumentId),
+          profiles.get(acc.instrumentId),
+        ),
+      )
       .sort((a, b) => Number(b.costBasis) - Number(a.costBasis));
   }
 
@@ -336,9 +354,16 @@ export class PortfolioService {
     const isOpen = acc.quantity.greaterThan(EPSILON);
     const quotes = isOpen ? await this.quotes.getQuotes([acc]) : new Map();
     const candles = await this.quotes.getCandles(acc, days);
+    // También para posiciones cerradas: el nombre y el logo siguen siendo
+    // válidos aunque ya no tengas la acción.
+    const profiles = await this.profiles.getProfiles([acc]);
 
     return {
-      position: this.toPositionDto(acc, quotes.get(acc.instrumentId)),
+      position: this.toPositionDto(
+        acc,
+        quotes.get(acc.instrumentId),
+        profiles.get(acc.instrumentId),
+      ),
       isOpen,
       candles,
       quotesConfigured: this.quotes.isConfigured(),

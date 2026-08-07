@@ -95,7 +95,9 @@ export function XtbUpdateCard({ className }: { className?: string }) {
       setFile(selected);
     } catch (err) {
       setPreview(null);
-      setError(err instanceof Error ? err.message : "Error al leer el archivo.");
+      setError(
+        err instanceof Error ? err.message : "Error al leer el archivo.",
+      );
     } finally {
       setBusy(null);
     }
@@ -176,7 +178,11 @@ export function XtbUpdateCard({ className }: { className?: string }) {
             </div>
 
             <div className="flex flex-col gap-1">
-              <DeltaRow label="Se agregan" value={preview.added} tone="positive" />
+              <DeltaRow
+                label="Se agregan"
+                value={preview.added}
+                tone="positive"
+              />
               <DeltaRow
                 label="Se eliminan"
                 value={preview.removed}
@@ -220,7 +226,9 @@ export function XtbUpdateCard({ className }: { className?: string }) {
                 onClick={handleConfirm}
                 disabled={busy !== null}
               >
-                {busy === "import" ? "Actualizando..." : "Confirmar y reemplazar"}
+                {busy === "import"
+                  ? "Actualizando..."
+                  : "Confirmar y reemplazar"}
               </Button>
               <Button
                 type="button"

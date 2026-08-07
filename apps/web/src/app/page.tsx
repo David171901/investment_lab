@@ -13,7 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { XtbUpdateCard } from "@/components/xtb-update-card";
+import { InstrumentBadge } from "@/components/instrument-badge";
 import { cn } from "@/lib/utils";
 import {
   fetchDividendEvents,
@@ -228,10 +228,6 @@ export default function DashboardPage() {
         </Card>
       </section>
 
-      {/* 2a. Actualización del archivo de XTB (Fase 4.5). Va acá, antes de la
-          valuación, porque es lo que hace que todo lo de abajo esté al día. */}
-      <XtbUpdateCard />
-
       {/* 2b. Valuación a mercado (Fase 3.5) — fila aparte para no alterar la
           grilla de hero-stats; si no hay cotizaciones muestra cómo activarlas. */}
       <section className="flex flex-col gap-4">
@@ -376,7 +372,13 @@ export default function DashboardPage() {
                 <TableBody>
                   {topPositions.map((p) => (
                     <TableRow key={p.symbol} className={ROW_HOVER}>
-                      <TableCell className="font-medium">{p.symbol}</TableCell>
+                      <TableCell>
+                        <InstrumentBadge
+                          symbol={p.symbol}
+                          name={p.name}
+                          logoUrl={p.logoUrl}
+                        />
+                      </TableCell>
                       <TableCell className="text-muted-foreground">
                         {p.market ?? "—"}
                       </TableCell>

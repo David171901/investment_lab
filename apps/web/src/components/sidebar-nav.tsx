@@ -7,6 +7,7 @@ import {
   BarChart3,
   Briefcase,
   LayoutDashboard,
+  Settings,
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -17,6 +18,8 @@ const NAV_ITEMS = [
   { href: "/analisis", label: "Análisis", icon: BarChart3 },
   { href: "/asistente", label: "Asistente", icon: Sparkles },
   { href: "/operaciones", label: "Operaciones", icon: ArrowLeftRight },
+  // Va último y separado del resto: es mantenimiento, no consulta diaria.
+  { href: "/configuracion", label: "Configuración", icon: Settings },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {

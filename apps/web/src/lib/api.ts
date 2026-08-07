@@ -96,7 +96,10 @@ export async function fetchLastImportRun(): Promise<LastImportRun | null> {
 
 export interface Position {
   symbol: string;
+  // Nombre de la empresa; cae al symbol si el proveedor de perfiles no respondio.
   name: string;
+  // Logo del proveedor. Null cuando el emisor no tiene uno (ej. BVN.US).
+  logoUrl: string | null;
   market: string | null;
   currency: string;
   quantity: string;

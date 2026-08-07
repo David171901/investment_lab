@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { InstrumentBadge } from "@/components/instrument-badge";
 import { cn } from "@/lib/utils";
 import { fetchPositions, type Position } from "@/lib/api";
 import { formatMoney, formatQuantity } from "@/lib/format";
@@ -162,12 +163,16 @@ export default function PortafolioPage() {
                   <TableBody>
                     {filteredPositions.map((p) => (
                       <TableRow key={p.symbol} className={ROW_HOVER}>
-                        <TableCell className="font-medium">
+                        <TableCell>
                           <Link
                             href={`/portafolio/${encodeURIComponent(p.symbol)}`}
-                            className="text-[var(--accent)] hover:underline"
+                            className="inline-flex hover:opacity-80"
                           >
-                            {p.symbol}
+                            <InstrumentBadge
+                              symbol={p.symbol}
+                              name={p.name}
+                              logoUrl={p.logoUrl}
+                            />
                           </Link>
                         </TableCell>
                         <TableCell className="text-muted-foreground">
@@ -289,12 +294,16 @@ function PositionCard({ position: p }: { position: Position }) {
   return (
     <Card className="gap-3 py-5">
       <CardContent className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <Link
             href={`/portafolio/${encodeURIComponent(p.symbol)}`}
-            className="font-medium text-[var(--accent)] hover:underline"
+            className="min-w-0 hover:opacity-80"
           >
-            {p.symbol}
+            <InstrumentBadge
+              symbol={p.symbol}
+              name={p.name}
+              logoUrl={p.logoUrl}
+            />
           </Link>
           {p.market && (
             <span className="rounded-lg bg-white/[0.06] px-2 py-0.5 text-[11px] text-muted-foreground">

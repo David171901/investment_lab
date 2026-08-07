@@ -11,9 +11,12 @@ import { sectorForIndustry } from './sectors';
 const PROFILE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface ProfileDto {
+  /** Nombre comercial. Null si el proveedor no lo conoce. */
+  name: string | null;
   industry: string | null;
   sector: string;
   country: string | null;
+  logoUrl: string | null;
 }
 
 interface InstrumentRef {
@@ -74,9 +77,12 @@ export class ProfilesService {
       where: { id: { in: ids } },
       select: {
         id: true,
+        name: true,
+        symbol: true,
         industry: true,
         sector: true,
         country: true,
+        logoUrl: true,
         profileFetchedAt: true,
       },
     });
@@ -92,11 +98,15 @@ export class ProfilesService {
       // el proveedor no haya devuelto nada, para no reintentar en cada carga.
       const fresh = hit?.profileFetchedAt && hit.profileFetchedAt > cutoff;
       if (fresh) {
-        if (hit.sector || hit.country) {
+        if (hit.sector || hit.country || hit.logoUrl) {
           result.set(instrument.instrumentId, {
+            // `name` arranca igual al symbol (el import no tiene el nombre de
+            // la empresa); si sigue así, es un placeholder, no un nombre real.
+            name: hit.name && hit.name !== hit.symbol ? hit.name : null,
             industry: hit.industry,
             sector: hit.sector ?? sectorForIndustry(null),
             country: hit.country,
+            logoUrl: hit.logoUrl,
           });
         }
         continue;
@@ -119,18 +129,26 @@ export class ProfilesService {
         await this.prisma.instrument.update({
           where: { id: instrument.instrumentId },
           data: {
+            // El import deja `name` igual al symbol porque el export de XTB no
+            // trae el nombre de la empresa; acá se completa con el del
+            // proveedor. Solo se pisa si hay uno real, para no degradar el
+            // dato cuando el proveedor no conoce el instrumento.
+            ...(profile?.name ? { name: profile.name } : {}),
             industry: profile?.industry ?? null,
             sector,
             country: profile?.country ?? null,
+            logoUrl: profile?.logoUrl ?? null,
             profileFetchedAt: new Date(),
           },
         });
 
         if (profile) {
           result.set(instrument.instrumentId, {
+            name: profile.name,
             industry: profile.industry,
             sector: sector ?? sectorForIndustry(null),
             country: profile.country,
+            logoUrl: profile.logoUrl,
           });
         }
       }

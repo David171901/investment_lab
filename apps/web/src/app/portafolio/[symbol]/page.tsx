@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CandlestickChart } from "@/components/candlestick-chart";
+import { InstrumentBadge } from "@/components/instrument-badge";
 import { cn } from "@/lib/utils";
 import { fetchInstrumentDetail } from "@/lib/api";
 import { formatMoney, formatQuantity } from "@/lib/format";
@@ -69,8 +70,13 @@ export default function InstrumentDetailPage({
   return (
     <div className="mx-auto flex w-full min-h-screen max-w-[1180px] flex-col gap-8 px-6 py-8">
       <nav className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-lg font-medium">{symbol}</span>
+        <div className="flex items-center gap-3">
+          <InstrumentBadge
+            symbol={symbol}
+            name={p?.name}
+            logoUrl={p?.logoUrl}
+            size="lg"
+          />
           <span className="text-[13px] text-muted-foreground">
             {detail?.isOpen === false
               ? "Posición cerrada — historial de operaciones"
