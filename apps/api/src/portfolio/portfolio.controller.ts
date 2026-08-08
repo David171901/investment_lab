@@ -30,6 +30,12 @@ export class PortfolioController {
     return this.portfolioService.getDividendEvents();
   }
 
+  // "Empresas que poseías": posiciones cerradas, una fila por ciclo compra-venta.
+  @Get('closed-positions')
+  getClosedPositions() {
+    return this.portfolioService.getClosedPositions();
+  }
+
   @Get('diversification')
   getDiversification(@Query('basis') basis?: string) {
     const valuation: ValuationBasis = basis === 'market' ? 'market' : 'cost';

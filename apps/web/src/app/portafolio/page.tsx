@@ -15,8 +15,17 @@ import {
 } from "@/components/ui/table";
 import { InstrumentBadge } from "@/components/instrument-badge";
 import { cn } from "@/lib/utils";
-import { fetchPositions, type Position } from "@/lib/api";
+import {
+  fetchPositions,
+  fetchClosedPositions,
+  type Position,
+  type ClosedPosition,
+} from "@/lib/api";
 import { formatMoney, formatQuantity } from "@/lib/format";
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("es-ES");
+}
 
 const ROW_HOVER = "hover:bg-white/[0.04]";
 
@@ -25,12 +34,6 @@ function pnlClass(value: string | number): string {
   if (n > 0) return "text-positive";
   if (n < 0) return "text-negative";
   return "text-muted-foreground";
-}
-
-function PnlValue({ value, currency }: { value: string; currency: string }) {
-  const n = Number(value);
-  if (n === 0) return <span className="text-muted-foreground">—</span>;
-  return <span className={pnlClass(n)}>{formatMoney(value, currency)}</span>;
 }
 
 // P&L no realizado con su rendimiento %; "—" cuando no hay cotización.
@@ -52,6 +55,23 @@ function UnrealizedValue({ position: p }: { position: Position }) {
   );
 }
 
+// P&L realizado de un ciclo cerrado, con su % de retorno; "—" cuando el costo
+// base es despreciable (mismo criterio que `UnrealizedValue`).
+function ClosedReturnValue({ position: c }: { position: ClosedPosition }) {
+  const n = Number(c.realizedPnL);
+  return (
+    <span className={cn(pnlClass(n), "inline-flex items-center gap-1.5")}>
+      {formatMoney(c.realizedPnL, c.currency)}
+      {c.returnPct != null && (
+        <span className="text-[11px] opacity-80">
+          ({c.returnPct >= 0 ? "+" : ""}
+          {c.returnPct.toFixed(1)}%)
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function PortafolioPage() {
   const positionsQuery = useQuery({
     queryKey: ["portfolio-positions"],
@@ -59,6 +79,11 @@ export default function PortafolioPage() {
     // mande su objeto de contexto como argumento `refresh` (truthy) y forzara
     // consulta al proveedor en cada carga.
     queryFn: () => fetchPositions(),
+  });
+
+  const closedPositionsQuery = useQuery({
+    queryKey: ["portfolio-closed-positions"],
+    queryFn: fetchClosedPositions,
   });
 
   const [view, setView] = useState<"table" | "cards">("table");
@@ -154,9 +179,6 @@ export default function PortafolioPage() {
                       <TableHead className="text-right">
                         P&amp;L no realizado
                       </TableHead>
-                      <TableHead className="text-right">
-                        P&amp;L realizado
-                      </TableHead>
                       <TableHead className="text-right">Dividendos</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -217,12 +239,6 @@ export default function PortafolioPage() {
                           <UnrealizedValue position={p} />
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          <PnlValue
-                            value={p.realizedPnL}
-                            currency={p.currency}
-                          />
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
                           {Number(p.dividendsCollected) > 0 ? (
                             <span className="text-positive">
                               {formatMoney(p.dividendsCollected, p.currency)}
@@ -233,7 +249,7 @@ export default function PortafolioPage() {
                         </TableCell>
                       </TableRow>
                     ))}
-                    {filteredPositions.length === 0 && <EmptyRow colSpan={10} />}
+                    {filteredPositions.length === 0 && <EmptyRow colSpan={9} />}
                   </TableBody>
                 </Table>
               </CardContent>
@@ -252,6 +268,89 @@ export default function PortafolioPage() {
               )}
             </div>
           )}
+      </section>
+
+      <section className="flex flex-col gap-5">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-xl font-medium">Empresas que poseías</h2>
+          <p className="text-[13px] text-muted-foreground">
+            Ciclos de compra-venta ya cerrados, más reciente primero
+          </p>
+        </div>
+
+        {closedPositionsQuery.isError && (
+          <p className="text-negative">
+            No se pudo cargar el historial de posiciones cerradas.
+          </p>
+        )}
+        {closedPositionsQuery.isLoading && (
+          <p className="text-muted-foreground">Cargando historial...</p>
+        )}
+        {closedPositionsQuery.data && closedPositionsQuery.data.length === 0 && (
+          <p className="text-muted-foreground">
+            Todavía no cerraste ninguna posición por completo.
+          </p>
+        )}
+
+        {closedPositionsQuery.data && closedPositionsQuery.data.length > 0 && (
+          <Card className="py-4">
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow className={ROW_HOVER}>
+                    <TableHead>Empresa</TableHead>
+                    <TableHead>Mercado</TableHead>
+                    <TableHead className="text-right">Apertura</TableHead>
+                    <TableHead className="text-right">Cierre</TableHead>
+                    <TableHead className="text-right">Cantidad</TableHead>
+                    <TableHead className="text-right">Precio prom. compra</TableHead>
+                    <TableHead className="text-right">Precio prom. venta</TableHead>
+                    <TableHead className="text-right">P&amp;L realizado</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {closedPositionsQuery.data.map((c, i) => (
+                    <TableRow key={`${c.symbol}-${c.closeDate}-${i}`} className={ROW_HOVER}>
+                      <TableCell>
+                        <Link
+                          href={`/portafolio/${encodeURIComponent(c.symbol)}`}
+                          className="inline-flex hover:opacity-80"
+                        >
+                          <InstrumentBadge
+                            symbol={c.symbol}
+                            name={c.name}
+                            logoUrl={c.logoUrl}
+                          />
+                        </Link>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {c.market ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {formatDate(c.openDate)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {formatDate(c.closeDate)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatQuantity(c.quantity)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatMoney(c.averageBuyPrice, c.currency)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatMoney(c.averageSellPrice, c.currency)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <ClosedReturnValue position={c} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
       </section>
     </div>
   );
@@ -273,10 +372,6 @@ function PositionCard({ position: p }: { position: Position }) {
     {
       label: "P&L no realizado",
       node: <UnrealizedValue position={p} />,
-    },
-    {
-      label: "P&L realizado",
-      node: <PnlValue value={p.realizedPnL} currency={p.currency} />,
     },
     {
       label: "Dividendos",

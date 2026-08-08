@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { QuotesService, type QuoteDto } from '../quotes/quotes.service';
 import { ProfilesService, type ProfileDto } from '../quotes/profiles.service';
 import { Prisma } from '../../generated/prisma/client';
+import { computeClosedCycles } from './closed-positions';
 
 const D = Prisma.Decimal;
 type DecimalValue = Prisma.Decimal;
@@ -72,6 +73,25 @@ export interface RealizedEventDto {
   averageCost: string;
   commission: string;
   realizedPnL: string;
+}
+
+// Un ciclo completo de compra-venta ya cerrado: de la primera compra que abrió
+// la posición a la venta que la dejó en cantidad cero. Si una empresa se
+// compró y vendió por completo más de una vez, aparece una fila por cada vez
+// (ver `closed-positions.ts` para el criterio de "ciclo").
+export interface ClosedPositionDto {
+  symbol: string;
+  name: string;
+  logoUrl: string | null;
+  market: string | null;
+  currency: string;
+  openDate: string;
+  closeDate: string;
+  quantity: string;
+  averageBuyPrice: string;
+  averageSellPrice: string;
+  realizedPnL: string;
+  returnPct: number | null;
 }
 
 // Cada dividendo cobrado.
@@ -381,6 +401,82 @@ export class PortfolioService {
   async getDividendEvents(): Promise<DividendEventDto[]> {
     const { dividendEvents } = await this.compute();
     return dividendEvents.sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  /**
+   * "Empresas que poseías": posiciones que se compraron y vendieron por
+   * completo, una fila por ciclo (ver `closed-positions.ts`). El modelo de
+   * datos no distingue ciclos explícitamente — se derivan recorriendo las
+   * operaciones de cada instrumento en orden cronológico y cortando cada vez
+   * que la cantidad neta vuelve a cero. Más reciente primero por fecha de
+   * cierre.
+   */
+  async getClosedPositions(): Promise<ClosedPositionDto[]> {
+    const operations = await this.prisma.operation.findMany({
+      include: { instrument: true },
+      where: { type: { in: ['BUY', 'SELL'] } },
+    });
+
+    const grouped = new Map<string, typeof operations>();
+    for (const op of operations) {
+      const list = grouped.get(op.instrumentId) ?? [];
+      list.push(op);
+      grouped.set(op.instrumentId, list);
+    }
+
+    const instrumentRefs = [...grouped.values()].map((ops) => ({
+      instrumentId: ops[0].instrumentId,
+      symbol: ops[0].instrument.symbol,
+      externalTicker: ops[0].instrument.externalTicker,
+    }));
+    const profiles = await this.profiles.getProfiles(instrumentRefs);
+
+    const closedPositions: ClosedPositionDto[] = [];
+
+    for (const [instrumentId, ops] of grouped) {
+      ops.sort((a, b) => {
+        const dateDiff = a.date.getTime() - b.date.getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9);
+      });
+
+      const instrument = ops[0].instrument;
+      const cycles = computeClosedCycles(
+        ops.map((op) => ({
+          type: op.type as 'BUY' | 'SELL',
+          date: op.date,
+          quantity: new D(op.quantity),
+          price: new D(op.price),
+          commission: new D(op.commission),
+        })),
+      );
+
+      const profile = profiles.get(instrumentId);
+
+      for (const cycle of cycles) {
+        const negligibleCost =
+          cycle.totalBuyCost.abs().lessThanOrEqualTo(EPSILON);
+
+        closedPositions.push({
+          symbol: instrument.symbol,
+          name: profile?.name ?? instrument.name,
+          logoUrl: profile?.logoUrl ?? null,
+          market: instrument.market,
+          currency: instrument.currency,
+          openDate: cycle.openDate.toISOString(),
+          closeDate: cycle.closeDate.toISOString(),
+          quantity: cycle.quantity.toString(),
+          averageBuyPrice: cycle.averageBuyPrice.toString(),
+          averageSellPrice: cycle.averageSellPrice.toString(),
+          realizedPnL: cycle.realizedPnL.toString(),
+          returnPct: negligibleCost
+            ? null
+            : Number(cycle.realizedPnL.dividedBy(cycle.totalBuyCost).times(100)),
+        });
+      }
+    }
+
+    return closedPositions.sort((a, b) => b.closeDate.localeCompare(a.closeDate));
   }
 
   /**

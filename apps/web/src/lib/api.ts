@@ -188,6 +188,28 @@ export async function fetchDividendEvents(): Promise<DividendEvent[]> {
   return res.json();
 }
 
+// "Empresas que poseías": una fila por ciclo de compra-venta ya cerrado.
+export interface ClosedPosition {
+  symbol: string;
+  name: string;
+  logoUrl: string | null;
+  market: string | null;
+  currency: string;
+  openDate: string;
+  closeDate: string;
+  quantity: string;
+  averageBuyPrice: string;
+  averageSellPrice: string;
+  realizedPnL: string;
+  returnPct: number | null;
+}
+
+export async function fetchClosedPositions(): Promise<ClosedPosition[]> {
+  const res = await fetch(`${API_URL}/portfolio/closed-positions`);
+  if (!res.ok) throw new Error("No se pudo cargar el historial de posiciones cerradas.");
+  return res.json();
+}
+
 export interface AllocationSlice {
   label: string;
   market: string | null;
